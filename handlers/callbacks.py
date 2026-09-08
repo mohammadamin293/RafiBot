@@ -4,6 +4,9 @@ from core.api_client import answer_callback, edit_message_text
 from services.xp_service import add_xp
 from handlers.games import active_trivias, handle_trivia
 from handlers.fun import process_vote
+from services.group_service import toggle_setting, get_group_settings
+from services.permission_service import is_group_admin
+from handlers.admin import get_admin_panel_keyboard
 
 def get_back_keyboard():
     return {
@@ -53,6 +56,28 @@ async def handle_callback_query(callback_query):
         text = "🤖 <b>RafiBot</b>\n\nیکی از گزینه‌ها را انتخاب کنید:"
         from handlers.base import get_start_inline_keyboard
         await edit_message_text(chat_id, message_id, text, reply_markup=get_start_inline_keyboard())
+        # --- پنل مدیریت ---
+    elif data == "admin_panel":
+        settings = await get_group_settings(chat_id)
+        text = "🛡 <b>پنل مدیریت گروه</b>\n\nبا کلیک روی هر دکمه، آن قابلیت را روشن یا خاموش کنید:"
+        await edit_message_text(chat_id, message_id, text, reply_markup=get_admin_panel_keyboard(settings))
+
+    elif data.startswith("toggle_"):
+        setting_key = data.split("_")[1]
+        
+        # چک کردن اینکه آیا کاربر ادمین است؟
+        if not await is_group_admin(chat_id, user_id):
+            await answer_callback(callback_id, text="شما ادمین گروه نیستید!", show_alert=True)
+            return
+            
+        # تغییر تنظیمات در دیتابیس
+        new_val = await toggle_setting(chat_id, setting_key)
+        settings = await get_group_settings(chat_id)
+        
+        # آپدیت کردن پیام و دکمه‌ها
+        text = "🛡 <b>پنل مدیریت گروه</b>\n\nبا کلیک روی هر دکمه، آن قابلیت را روشن یا خاموش کنید:"
+        await edit_message_text(chat_id, message_id, text, reply_markup=get_admin_panel_keyboard(settings))
+        await answer_callback(callback_id, text="تنظیمات با موفقیت ذخیره شد! ✅")
         
     # --- بازی‌ها ---
     elif data == "game_guess":

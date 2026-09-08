@@ -16,6 +16,7 @@ from handlers.admin import (
 )
 from handlers.ai import handle_ask, handle_suggest, handle_challenge
 from handlers.economy import handle_balance, handle_daily, handle_coinflip
+from handlers.admin import handle_admin_panel
 
 MENU_BUTTONS = ["🎮 بازی‌ها", "🏆 رتبه من", "😂 فان", "🛡 مدیریت", "⚙️ تنظیمات", "❓ راهنما"]
 
@@ -43,7 +44,7 @@ async def route_message(message):
     if text == "😂 فان":
         await handle_fun_menu(chat_id); return
     if text == "🛡 مدیریت":
-        await handle_admin_menu(chat_id); return
+        await handle_admin_panel(chat_id); return
     if text == "⚙️ تنظیمات":
         await handle_settings_menu(chat_id); return
 

@@ -56,6 +56,10 @@ async def init_db():
         # اضافه کردن ستون‌های اقتصاد به صورت امن
     await _add_column_if_missing("user_stats", "coins", "INTEGER DEFAULT 0")
     await _add_column_if_missing("user_stats", "last_daily", "TIMESTAMP")
+        # اضافه کردن ستون‌های پنل تنظیمات به صورت امن
+    await _add_column_if_missing("groups", "antispam", "BOOLEAN DEFAULT 1")
+    await _add_column_if_missing("groups", "filter_enabled", "BOOLEAN DEFAULT 1")
+    await _add_column_if_missing("groups", "welcome_enabled", "BOOLEAN DEFAULT 1")
 
 
 async def _add_column_if_missing(table, column, definition):

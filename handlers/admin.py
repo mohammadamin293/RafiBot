@@ -117,3 +117,27 @@ async def handle_premium_info(chat_id):
         "برای خرید با پشتیبانی در ارتباط باشید: @SupportID"
     )
     await send_message(chat_id, text)
+# handlers/admin.py (اضافه شود به انتهای فایل)
+from services.group_service import get_group_settings
+
+def get_admin_panel_keyboard(settings):
+    """ساخت کیبورد شیشه‌ای پنل مدیریت"""
+    def status_btn(key, label):
+        val = settings.get(key, 0)
+        status = "🟢" if val else "🔴"
+        return {"text": f"{label} {status}", "callback_data": f"toggle_{key}"}
+
+    return {
+        "inline_keyboard": [
+            [status_btn("antilink", "آنتی‌لینک"), status_btn("antispam", "ضد اسپم")],
+            [status_btn("filter_enabled", "فیلتر کلمات"), status_btn("welcome_enabled", "خوش‌آمدگویی")],
+            [{"text": "🔙 بازگشت به منوی اصلی", "callback_data": "main_menu"}]
+        ]
+    }
+
+async def handle_admin_panel(chat_id):
+    """نمایش پنل مدیریت"""
+    settings = await get_group_settings(chat_id)
+    text = "🛡 <b>پنل مدیریت گروه</b>\n\nبا کلیک روی هر دکمه، آن قابلیت را روشن یا خاموش کنید:"
+    from core.api_client import send_message
+    await send_message(chat_id, text, reply_markup=get_admin_panel_keyboard(settings))

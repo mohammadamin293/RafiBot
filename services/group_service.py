@@ -86,3 +86,21 @@ async def increment_message_count(chat_id):
 async def get_message_count(chat_id):
     row = await execute_query("SELECT total_messages FROM groups WHERE chat_id=?", (chat_id,), fetch=True)
     return row[0]["total_messages"] if row and row[0]["total_messages"] is not None else 0
+# services/group_service.py (اضافه شود به انتهای فایل)
+
+async def get_group_settings(chat_id):
+    """گرفتن تمام تنظیمات یک گروه"""
+    await ensure_group_exists(chat_id)
+    row = await execute_query("SELECT antilink, antispam, filter_enabled, welcome_enabled FROM groups WHERE chat_id=?", (chat_id,), fetch=True)
+    return dict(row[0]) if row else {}
+
+async def toggle_setting(chat_id, setting_name):
+    """روشن یا خاموش کردن یک تنظیم خاص"""
+    await ensure_group_exists(chat_id)
+    # خواندن وضعیت فعلی
+    row = await execute_query(f"SELECT {setting_name} FROM groups WHERE chat_id=?", (chat_id,), fetch=True)
+    current = bool(row[0][setting_name]) if row else False
+    new_val = 0 if current else 1
+    # آپدیت در دیتابیس
+    await execute_query(f"UPDATE groups SET {setting_name}=? WHERE chat_id=?", (new_val, chat_id))
+    return new_val

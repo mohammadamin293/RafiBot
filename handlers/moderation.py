@@ -9,6 +9,7 @@ from services.group_service import (
 )
 from services.permission_service import is_group_admin
 from core.normalizer import normalize_text
+from services.group_service import get_group_settings
 
 MAX_WARNINGS = 3
 MAX_FREE_FILTERS = 3
@@ -83,42 +84,42 @@ async def handle_set_antilink(chat_id, text, user_id):
     await send_message(chat_id, "🛡 آنتی‌لینک فعال شد." if enabled else "🔓 آنتی‌لینک غیرفعال شد.")
 
 async def check_message_violations(chat_id, message):
-    """بررسی لینک‌ها، فیلتر کلمات و اسپم"""
     text = message.get("text", "")
     message_id = message["message_id"]
     user_id = message["from"]["id"]
+    
+    # گرفتن تنظیمات گروه از دیتابیس
+    settings = await get_group_settings(chat_id)
 
-    # ۱. بررسی ضد لینک
-    if await is_antilink_enabled(chat_id):
-        # رجکس قوی‌تر برای انواع لینک‌ها
+    # ۱. بررسی ضد لینک (فقط اگر فعال باشه)
+    if settings.get("antilink", 1):
         url_pattern = re.compile(r'(https?://\S+|www\.\S+|t\.me/\S+|telegram\.me/\S+|splus\.ir/\S+)', re.IGNORECASE)
         if url_pattern.search(text):
             await delete_message(chat_id, message_id)
             await send_message(chat_id, "🛑 ارسال لینک ممنوع است!")
             return True
 
-    # ۲. بررسی فیلتر کلمات با متن نرمالایز شده
-    filters = await get_filters(chat_id)
-    normalized_text = normalize_text(text)
-    for bad_word in filters:
-        if bad_word in normalized_text:
-            await delete_message(chat_id, message_id)
-            await send_message(chat_id, "🛑 استفاده از کلمات ممنوعه مجاز نیست!")
-            return True
+    # ۲. بررسی فیلتر کلمات (فقط اگر فعال باشه)
+    if settings.get("filter_enabled", 1):
+        filters = await get_filters(chat_id)
+        normalized_text = normalize_text(text)
+        for bad_word in filters:
+            if bad_word in normalized_text:
+                await delete_message(chat_id, message_id)
+                await send_message(chat_id, "🛑 استفاده از کلمات ممنوعه مجاز نیست!")
+                return True
 
-    # ۳. بررسی اسپم و فلود (Flood Detection)
-    now = time.time()
-    # پاکسازی پیام‌های قدیمی‌تر از ۵ ثانیه
-    _flood_cache[user_id] = [t for t in _flood_cache[user_id] if now - t < FLOOD_WINDOW]
-    _flood_cache[user_id].append(now)
-    
-    if len(_flood_cache[user_id]) > FLOOD_LIMIT:
-        await delete_message(chat_id, message_id)
-        await send_message(chat_id, f"⚠️ کاربر <b>{message['from'].get('first_name', '')}</b> به دلیل اسپم کردن محدود شد!")
-        # پاک کردن کش برای جلوگیری از لوپ اخطار
-        _flood_cache[user_id] = [] 
-        # اخطار خودکار برای اسپم
-        await add_warning(user_id, chat_id, "اسپم و فلود")
-        return True
+    # ۳. بررسی اسپم و فلود (فقط اگر ضد اسپم فعال باشه)
+    if settings.get("antispam", 1):
+        now = time.time()
+        _flood_cache[user_id] = [t for t in _flood_cache[user_id] if now - t < FLOOD_WINDOW]
+        _flood_cache[user_id].append(now)
+        
+        if len(_flood_cache[user_id]) > FLOOD_LIMIT:
+            await delete_message(chat_id, message_id)
+            await send_message(chat_id, f"⚠️ کاربر <b>{message['from'].get('first_name', '')}</b> به دلیل اسپم محدود شد!")
+            _flood_cache[user_id] = [] 
+            await add_warning(user_id, chat_id, "اسپم و فلود")
+            return True
 
     return False
