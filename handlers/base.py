@@ -1,5 +1,6 @@
 # handlers/base.py
 from core.api_client import send_message
+from services.economy_service import get_balance
 
 # --- کیبوردها ---
 def get_main_menu_keyboard():
@@ -49,6 +50,10 @@ async def handle_help(chat_id):
         "/ban [reply] - بن کردن مجازی\n"
         "/filter [word] - اضافه کردن کلمه ممنوع\n\n"
         "🎮 <b>سرگرمی:</b> (به زودی)\n"
+        "💰 <b>اقتصاد:</b>\n"
+        "/balance - نمایش موجودی سکه‌ها\n"
+        "/daily - دریافت پاداش روزانه\n"
+        "/coinflip [شیر/خط] [مبلغ] - شرط‌بندی شیر یا خط\n\n"
     )
     await send_message(chat_id, text)
 
@@ -68,6 +73,10 @@ async def handle_fun_menu(chat_id):
         "📊 <code>/vote [موضوع]</code> - رأی‌گیری\n"
         "🤔 <code>/truth</code> - سوال حقیقت\n"
         "🔥 <code>/dare</code> - چالش (جرئت)"
+        "💰 <b>اقتصاد:</b>\n"
+        "/balance - نمایش موجودی سکه‌ها\n"
+        "/daily - دریافت پاداش روزانه\n"
+        "/coinflip [شیر/خط] [مبلغ] - شرط‌بندی شیر یا خط\n\n"
     )
     await send_message(chat_id, text)
 
@@ -92,11 +101,13 @@ from services.xp_service import get_user_stats, get_top_users
 
 async def handle_profile(chat_id, user_id, first_name):
     stats = await get_user_stats(user_id, chat_id)
+    balance = await get_balance(user_id, chat_id) # گرفتن موجودی سکه
     text = (
         f"🏆 <b>پروفایل کاربری</b>\n\n"
         f"👤 نام: <b>{first_name}</b>\n"
         f"⭐ سطح: <b>{stats['level']}</b>\n"
-        f"⚡ امتیاز (XP): <b>{stats['xp']}</b>\n\n"
+        f"⚡ امتیاز (XP): <b>{stats['xp']}</b>\n"
+        f"💰 سکه: <b>{balance}</b>\n\n"
         f"🎮 برای کسب امتیاز بیشتر، در بازی‌ها شرکت کنید!"
     )
     await send_message(chat_id, text)

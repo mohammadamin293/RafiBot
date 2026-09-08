@@ -15,6 +15,7 @@ from handlers.admin import (
     handle_set_premium, handle_group_stats, handle_premium_info
 )
 from handlers.ai import handle_ask, handle_suggest, handle_challenge
+from handlers.economy import handle_balance, handle_daily, handle_coinflip
 
 MENU_BUTTONS = ["🎮 بازی‌ها", "🏆 رتبه من", "😂 فان", "🛡 مدیریت", "⚙️ تنظیمات", "❓ راهنما"]
 
@@ -92,3 +93,10 @@ async def route_message(message):
         await handle_group_stats(chat_id); return
     if text == "/premium":
         await handle_premium_info(chat_id); return
+        # --- دستورات اقتصاد ---
+    if text == "/balance":
+        await handle_balance(chat_id, user_id, first_name); return
+    if text == "/daily":
+        await handle_daily(chat_id, user_id, first_name); return
+    if text.startswith("/coinflip"):
+        await handle_coinflip(chat_id, text, user_id, first_name); return
