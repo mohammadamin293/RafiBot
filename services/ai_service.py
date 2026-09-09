@@ -1,41 +1,37 @@
-# services/ai_service.py
 import httpx
 import logging
-from urllib.parse import quote
-from config import MAJID_API_TOKEN
+from config import AVALAI_API_KEY
+
+AVALAI_BASE_URL = "https://api.avalai.ir/v1"
+# کلاینت دائمی برای reuse کردن کانکشن‌ها
+_ai_client = httpx.AsyncClient(timeout=30.0)
 
 async def ask_ai(prompt):
-    """ارسال درخواست به Majid API Copilot"""
+    """ارسال درخواست به AvalAI با شخصیت فرانس"""
+    headers = {
+        "Authorization": f"Bearer {AVALAI_API_KEY}",
+        "Content-Type": "application/json"
+    }
     
-    encoded_prompt = quote(prompt)
-    # اضافه کردن توکن در صورت وجود (برای اطمینان از عدم محدودیت)
-    if MAJID_API_TOKEN:
-        url = f"https://api.majidapi.ir/ai/copilot?token={MAJID_API_TOKEN}&q={encoded_prompt}"
-    else:
-        url = f"https://api.majidapi.ir/ai/copilot?q={encoded_prompt}"
+    # معرفی شخصیت فرانس به هوش مصنوعی
+    system_prompt = "Your name is France (فرانس). You are a fun, smart, and friendly AI assistant inside a Telegram/Soroush group bot. Answer in Persian concisely and casually."
+    
+    payload = {
+        "model": "gpt-4o-mini",
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt}
+        ],
+        "max_tokens": 800
+    }
     
     try:
-        # تایم‌اوت 30 ثانیه
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.get(url)
-            
-            if resp.status_code == 200:
-                # تلاش برای پارس کردن به صورت JSON، اگر نشد متن خام را برمی‌گردانیم
-                try:
-                    data = resp.json()
-                    if isinstance(data, dict) and "result" in data:
-                        return data["result"]
-                    elif isinstance(data, dict) and "response" in data:
-                        return data["response"]
-                    else:
-                        return str(data)
-                except Exception:
-                    return resp.text
-            else:
-                # برگرداندن متن خطای دقیق سرور
-                logging.error(f"Majid Copilot Error: {resp.status_code} - {resp.text}")
-                return f"🤖 خطای سرور (کد {resp.status_code}): {resp.text}"
-            
+        resp = await _ai_client.post(f"{AVALAI_BASE_URL}/chat/completions", headers=headers, json=payload)
+        if resp.status_code == 200:
+            return resp.json()["choices"][0]["message"]["content"]
+        else:
+            logging.error(f"AvalAI Error: {resp.status_code} - {resp.text}")
+            return f"🇫🇷 فرانس الان جواب نمیده (کد خطا: {resp.status_code})."
     except Exception as e:
-        logging.error(f"Majid Copilot Error: {type(e).__name__} - {e}")
-        return f"🤖 خطای شبکه: {type(e).__name__} - {e}"
+        logging.error(f"AvalAI Error: {type(e).__name__} - {e}")
+        return "🇫🇷 فرانس الان به اینترنت وصل نمیشه."

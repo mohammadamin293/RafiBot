@@ -3,10 +3,7 @@ import time
 from core.database import execute_query
 
 async def add_xp(user_id, chat_id, amount=5):
-    """افزودن XP با محدودیت زمانی (ضد اسپم)"""
     current_time = int(time.time())
-    
-    # بررسی آخرین زمان دریافت امتیاز
     row = await execute_query("SELECT last_xp_time, xp, level FROM user_stats WHERE user_id=? AND chat_id=?", (user_id, chat_id), fetch=True)
     
     if row:
@@ -14,22 +11,23 @@ async def add_xp(user_id, chat_id, amount=5):
         xp = row[0]["xp"]
         level = row[0]["level"]
         
-        # اگر کاربر در 30 ثانیه گذشته امتیاز گرفته، امتیاز ندهد (ضد اسپم)
         if current_time - last_time < 30:
-            return
+            return False # امتیاز نگرفت
             
         new_xp = xp + amount
-        new_level = (new_xp // 100) + 1 # هر 100 امتیاز = 1 سطح
+        new_level = (new_xp // 100) + 1
         
         await execute_query(
             "UPDATE user_stats SET xp=?, level=?, last_xp_time=? WHERE user_id=? AND chat_id=?", 
             (new_xp, new_level, current_time, user_id, chat_id)
         )
+        return new_level > level # اگر لول بالا رفت True می‌دهد
     else:
         await execute_query(
             "INSERT INTO user_stats (user_id, chat_id, xp, level, last_xp_time) VALUES (?, ?, ?, ?, ?)",
             (user_id, chat_id, amount, 1, current_time)
         )
+    return False
 
 async def get_user_stats(user_id, chat_id):
     row = await execute_query("SELECT xp, level FROM user_stats WHERE user_id=? AND chat_id=?", (user_id, chat_id), fetch=True)

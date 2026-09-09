@@ -7,13 +7,7 @@ from handlers.fun import process_vote
 from services.group_service import toggle_setting, get_group_settings
 from services.permission_service import is_group_admin
 from handlers.admin import get_admin_panel_keyboard
-
-def get_back_keyboard():
-    return {
-        "inline_keyboard": [
-            [{"text": "🔙 بازگشت به منوی اصلی", "callback_data": "main_menu"}]
-        ]
-    }
+from handlers.base import get_back_keyboard, get_start_inline_keyboard, get_help_keyboard
 
 def get_rps_keyboard():
     return {
@@ -22,7 +16,8 @@ def get_rps_keyboard():
                 {"text": "🪨 سنگ", "callback_data": "rps_rock"},
                 {"text": "📄 کاغذ", "callback_data": "rps_paper"},
                 {"text": "✂️ قیچی", "callback_data": "rps_scissors"}
-            ]
+            ],
+            [{"text": "🔙 بازگشت به بازی‌ها", "callback_data": "games_menu"}]
         ]
     }
 
@@ -30,65 +25,157 @@ async def handle_callback_query(callback_query):
     data = callback_query.get("data")
     user_id = callback_query["from"]["id"]
     first_name = callback_query["from"].get("first_name", "کاربر")
+    callback_id = callback_query.get("id")
     
-    message = callback_query.get("message")
+    message = callback_query.get("message") or callback_query.get("maybe_inaccessible_message")
     if not message:
-        message = callback_query.get("maybe_inaccessible_message")
-        
-    if not message: return
+        await answer_callback(callback_id, "❌ پیام یافت نشد", show_alert=True)
+        return
 
     chat_id = message.get("chat", {}).get("id")
     message_id = message.get("message_id")
-    callback_id = callback_query.get("id")
     
-    if not chat_id or not message_id: return
-        
+    if not chat_id or not message_id:
+        await answer_callback(callback_id, "❌ خطا در دریافت اطلاعات", show_alert=True)
+        return
+    
+    # همیشه ابتدا پاسخ دهید تا لودینگ متوقف شود
     await answer_callback(callback_id)
 
     # --- منوهای اصلی ---
     if data == "help_menu":
-        text = "📖 <b>راهنمای کامل</b>\n\n/warn\n/ban\n/filter\n/profile\n/top\n/who\n/vote\n/trivia"
+        text = "❓ <b>راهنمای رفی‌بات</b>\n\nبرای مشاهده هر بخش، روی دکمه مربوطه کلیک کن:"
+        await edit_message_text(chat_id, message_id, text, reply_markup=get_help_keyboard())
+    
+    elif data == "help_ai":
+        text = (
+            "🤖 <b>هوش مصنوعی (فرانس)</b>\n\n"
+            "دستورات:\n"
+            "<code>/ask [سوال]</code> - پرسیدن سوال از فرانس\n"
+            "<code>/suggest [موضوع]</code> - گرفتن ایده از فرانس\n"
+            "<code>/challenge</code> - ساخت چالش تصادفی\n\n"
+            "💡 می‌توانی کلمه «فرانس» را اول پیام بیاوری یا روی پیام بات ریپلای کنی!"
+        )
         await edit_message_text(chat_id, message_id, text, reply_markup=get_back_keyboard())
+    
+    elif data == "help_economy":
+        text = (
+            "💰 <b>اقتصاد و سکه</b>\n\n"
+            "<code>/balance</code> - نمایش موجودی شما\n"
+            "<code>/daily</code> - دریافت پاداش روزانه (با سیستم استریک)\n"
+            "<code>/work</code> - کار کردن و کسب سکه\n"
+            "<code>/coinflip [شیر/خط] [مبلغ]</code> - شرط‌بندی شیر یا خط\n"
+            "<code>/rob</code> - (ریپلای روی کاربر) دزدی از سکه دیگران\n"
+            "<code>/give [مبلغ]</code> - (ریپلای روی کاربر) هدیه دادن سکه\n"
+            "<code>/shop</code> - نمایش فروشگاه\n"
+            "<code>/buy [آیدی آیتم]</code> - خرید از فروشگاه"
+        )
+        await edit_message_text(chat_id, message_id, text, reply_markup=get_back_keyboard())
+    
+    elif data == "help_games":
+        text = (
+            "🎮 <b>بازی‌ها و فان</b>\n\n"
+            "<code>/trivia</code> - مسابقه عمومی ۴ گزینه‌ای\n"
+            "<code>/who</code> - انتخاب یک نفر تصادفی از افراد فعال\n"
+            "<code>/vote [موضوع]</code> - رأی‌گیری گروهی\n"
+            "<code>/truth</code> - سوال حقیقت\n"
+            "<code>/dare</code> - چالش جرئت"
+        )
+        await edit_message_text(chat_id, message_id, text, reply_markup=get_back_keyboard())
+    
+    elif data == "help_moderation":
+        text = (
+            "🛡 <b>مدیریت گروه (فقط ادمین‌ها)</b>\n\n"
+            "<code>/warn</code> - (ریپلای) دادن اخطار به کاربر\n"
+            "<code>/mute</code> - (ریپلای) میوت کردن کاربر\n"
+            "<code>/unmute</code> - (ریپلای) آزاد کردن کاربر\n"
+            "<code>/ban</code> - (ریپلای) بن مجازی کاربر\n"
+            "<code>/kick</code> - (ریپلای) اخراج کاربر از گروه\n"
+            "<code>/filter [کلمه]</code> - مسدود کردن کلمه ممنوعه\n"
+            "<code>/setwelcome [متن]</code> - تنظیم پیام خوش‌آمدگویی\n"
+            "<code>/setrules [متن]</code> - تنظیم قوانین گروه\n"
+            "<code>/rules</code> - مشاهده قوانین گروه\n"
+            "<code>/setantilink [on/off]</code> - خاموش/روشن کردن حذف لینک‌ها\n"
+            "<code>/logs</code> - مشاهده آخرین اقدامات ادمین‌ها\n"
+            "<code>/endvote</code> - پایان دادن به نظرسنجی فعال"
+        )
+        await edit_message_text(chat_id, message_id, text, reply_markup=get_back_keyboard())
+    
+    elif data == "help_profile":
+        text = (
+            "👤 <b>پروفایل و لول</b>\n\n"
+            "<code>/profile</code> - نمایش پروفایل شما (سطح، سکه، مدال‌ها)\n"
+            "<code>/top</code> - لیست برترین اعضای گروه\n\n"
+            "💡 با ارسال پیام در گروه، امتیاز (XP) کسب می‌کنی!\n"
+            "هر ۱۰۰ امتیاز = ۱ سطح"
+        )
+        await edit_message_text(chat_id, message_id, text, reply_markup=get_back_keyboard())
+    
     elif data == "premium_menu":
-        text = "💳 <b>Premium</b>\n\nبزودی..."
+        text = (
+            "💳 <b>نسخه Premium</b>\n\n"
+            "ویژگی‌های نسخه Premium:\n"
+            "🔹 فیلتر کلمات نامحدود (رایگان فقط ۳ کلمه)\n"
+            "🔹 دسترسی به آمار دقیق گروه\n"
+            "🔹 بازی‌های اختصاصی بیشتر\n"
+            "🔹 هوش مصنوعی پیشرفته\n\n"
+            "برای خرید با پشتیبانی در ارتباط باشید: @SupportID"
+        )
         await edit_message_text(chat_id, message_id, text, reply_markup=get_back_keyboard())
+    
     elif data == "main_menu":
-        text = "🤖 <b>RafiBot</b>\n\nیکی از گزینه‌ها را انتخاب کنید:"
-        from handlers.base import get_start_inline_keyboard
-        await edit_message_text(chat_id, message_id, text, reply_markup=get_start_inline_keyboard())
-        # --- پنل مدیریت ---
+        from handlers.base import get_main_menu_keyboard
+        text = "🤖 <b>RafiBot</b>\n\nیکی از گزینه‌ها را انتخاب کن:"
+        await edit_message_text(chat_id, message_id, text, reply_markup=get_main_menu_keyboard())
+    
+    elif data == "games_menu":
+        from handlers.base import get_games_inline_keyboard
+        text = "🎮 <b>منوی بازی‌ها</b>\n\nیک بازی را برای شروع انتخاب کن:"
+        await edit_message_text(chat_id, message_id, text, reply_markup=get_games_inline_keyboard())
+    
+    elif data == "back_to_previous":
+        # به منوی قبلی برمی‌گردیم
+        from handlers.base import get_main_menu_keyboard
+        text = "🤖 <b>RafiBot</b>\n\nیکی از گزینه‌ها را انتخاب کن:"
+        await edit_message_text(chat_id, message_id, text, reply_markup=get_main_menu_keyboard())
+    
+    # --- پنل مدیریت ---
     elif data == "admin_panel":
         settings = await get_group_settings(chat_id)
-        text = "🛡 <b>پنل مدیریت گروه</b>\n\nبا کلیک روی هر دکمه، آن قابلیت را روشن یا خاموش کنید:"
+        text = "🛡 <b>پنل مدیریت گروه</b>\n\nبا کلیک روی هر دکمه، آن قابلیت را روشن یا خاموش کن:"
         await edit_message_text(chat_id, message_id, text, reply_markup=get_admin_panel_keyboard(settings))
 
     elif data.startswith("toggle_"):
         setting_key = data.split("_")[1]
         
-        # چک کردن اینکه آیا کاربر ادمین است؟
         if not await is_group_admin(chat_id, user_id):
-            await answer_callback(callback_id, text="شما ادمین گروه نیستید!", show_alert=True)
+            await answer_callback(callback_id, text="⛔ شما ادمین گروه نیستید!", show_alert=True)
             return
             
-        # تغییر تنظیمات در دیتابیس
         new_val = await toggle_setting(chat_id, setting_key)
         settings = await get_group_settings(chat_id)
         
-        # آپدیت کردن پیام و دکمه‌ها
-        text = "🛡 <b>پنل مدیریت گروه</b>\n\nبا کلیک روی هر دکمه، آن قابلیت را روشن یا خاموش کنید:"
+        text = "🛡 <b>پنل مدیریت گروه</b>\n\nبا کلیک روی هر دکمه، آن قابلیت را روشن یا خاموش کن:"
         await edit_message_text(chat_id, message_id, text, reply_markup=get_admin_panel_keyboard(settings))
-        await answer_callback(callback_id, text="تنظیمات با موفقیت ذخیره شد! ✅")
+        await answer_callback(callback_id, text="✅ تنظیمات با موفقیت ذخیره شد!")
         
     # --- بازی‌ها ---
     elif data == "game_guess":
-        await edit_message_text(chat_id, message_id, "🎲 <b>حدس عدد</b>\n\nبه زودی!")
+        await edit_message_text(chat_id, message_id, "🎯 <b>حدس عدد</b>\n\nبه زودی!")
     elif data == "game_rps":
-        await edit_message_text(chat_id, message_id, "✂️ <b>سنگ، کاغذ، قیچی</b>\n\nانتخاب کن:", reply_markup=get_rps_keyboard())
+        await edit_message_text(
+            chat_id, message_id, 
+            "✂️ <b>سنگ، کاغذ، قیچی</b>\n\nانتخاب کن:",
+            reply_markup=get_rps_keyboard()
+        )
     elif data == "game_trivia":
         await handle_trivia(chat_id)
-        await edit_message_text(chat_id, message_id, "🧠 مسابقه عمومی شروع شد! به پیام بالایی نگاه کنید.")
+        await edit_message_text(
+            chat_id, message_id, 
+            "🧠 مسابقه عمومی شروع شد! به پیام بالایی نگاه کن."
+        )
         
-    # --- لاجیک بازی سنگ کاغذ قیچی ---
+    # --- سنگ کاغذ قیچی ---
     elif data.startswith("rps_"):
         user_choice = data.split("_")[1]
         bot_choice = random.choice(["rock", "paper", "scissors"])
@@ -104,31 +191,39 @@ async def handle_callback_query(callback_query):
         else:
             result_text = "😢 <b>من برنده شدم!</b>"
             
-        response = f"شما: {choices[user_choice]}\nمن: {choices[bot_choice]}\n\n{result_text}"
-        await edit_message_text(chat_id, message_id, response, reply_markup=get_back_keyboard())
+        response = (
+            f"شما: {choices[user_choice]}\n"
+            f"من: {choices[bot_choice]}\n\n"
+            f"{result_text}"
+        )
+        await edit_message_text(
+            chat_id, message_id, response,
+            reply_markup=get_rps_keyboard()
+        )
+        await answer_callback(callback_id, text="✅ انتخاب شما ثبت شد!")
 
-    # --- لاجیک رأی‌گیری (Vote) ---
+    # --- رأی‌گیری (Vote) ---
     elif data in ["vote_yes", "vote_no"]:
         choice = "yes" if data == "vote_yes" else "no"
         result = await process_vote(chat_id, message_id, user_id, choice)
         
         if result == "voted":
-            await answer_callback(callback_id, text="شما قبلاً رأی داده‌اید!", show_alert=True)
+            await answer_callback(callback_id, text="⛔ شما قبلاً رأی داده‌اید!", show_alert=True)
         elif result == "expired":
-            await answer_callback(callback_id, text="زمان این رأی‌گیری به پایان رسیده است.", show_alert=True)
+            await answer_callback(callback_id, text="⏳ زمان این رأی‌گیری به پایان رسیده است.", show_alert=True)
         else:
-            await answer_callback(callback_id, text="رأی شما ثبت شد! ✅")
+            await answer_callback(callback_id, text="✅ رأی شما ثبت شد!")
 
-    # --- لاجیک مسابقه عمومی (Trivia) ---
+    # --- مسابقه عمومی (Trivia) ---
     elif data.startswith("trivia_"):
         if message_id not in active_trivias:
-            await answer_callback(callback_id, text="زمان این سوال به پایان رسیده است!", show_alert=True)
+            await answer_callback(callback_id, text="⏳ زمان این سوال به پایان رسیده است!", show_alert=True)
             return
             
         game = active_trivias[message_id]
         
         if user_id in game["answered_by"]:
-            await answer_callback(callback_id, text="شما قبلاً جواب داده‌اید!", show_alert=True)
+            await answer_callback(callback_id, text="⛔ شما قبلاً جواب داده‌اید!", show_alert=True)
             return
             
         game["answered_by"].append(user_id)
@@ -137,7 +232,10 @@ async def handle_callback_query(callback_query):
         if user_choice == game["answer"]:
             del active_trivias[message_id]
             await add_xp(user_id, chat_id, 50)
-            await answer_callback(callback_id, text="🎉 درست بود! ۵۰ امتیاز گرفتید!", show_alert=True)
-            await edit_message_text(chat_id, message_id, f"🧠 <b>مسابقه عمومی</b>\n\n🏆 برنده: <b>{first_name}</b>!\n+50 XP به شما اضافه شد.")
+            await answer_callback(callback_id, text="🎉 درست بود! ۵۰ امتیاز گرفتی!", show_alert=True)
+            await edit_message_text(
+                chat_id, message_id,
+                f"🧠 <b>مسابقه عمومی</b>\n\n🏆 برنده: <b>{first_name}</b>!\n+50 XP به شما اضافه شد."
+            )
         else:
             await answer_callback(callback_id, text="❌ جواب اشتباه بود!", show_alert=True)

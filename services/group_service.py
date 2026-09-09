@@ -1,5 +1,47 @@
 # services/group_service.py
 from core.database import execute_query
+# services/group_service.py
+import time
+from core.database import execute_query
+
+_settings_cache = {}
+_filters_cache = {}
+
+async def get_group_settings(chat_id):
+    """گرفتن تنظیمات با کش ۵ دقیقه‌ای"""
+    current_time = time.time()
+    if chat_id in _settings_cache and current_time - _settings_cache[chat_id]["time"] < 300:
+        return _settings_cache[chat_id]["data"]
+        
+    await ensure_group_exists(chat_id)
+    row = await execute_query("SELECT antilink, antispam, filter_enabled, welcome_enabled, lock_links, lock_photos, lock_videos, lock_stickers, lock_forward FROM groups WHERE chat_id=?", (chat_id,), fetch=True)
+    data = dict(row[0]) if row else {}
+    _settings_cache[chat_id] = {"time": current_time, "data": data}
+    return data
+
+async def toggle_setting(chat_id, setting_name):
+    await ensure_group_exists(chat_id)
+    row = await execute_query(f"SELECT {setting_name} FROM groups WHERE chat_id=?", (chat_id,), fetch=True)
+    current = bool(row[0][setting_name]) if row else False
+    new_val = 0 if current else 1
+    await execute_query(f"UPDATE groups SET {setting_name}=? WHERE chat_id=?", (new_val, chat_id))
+    if chat_id in _settings_cache: del _settings_cache[chat_id] # پاک کردن کش
+    return new_val
+
+async def get_filters(chat_id):
+    """گرفتن فیلترها با کش ۵ دقیقه‌ای"""
+    current_time = time.time()
+    if chat_id in _filters_cache and current_time - _filters_cache[chat_id]["time"] < 300:
+        return _filters_cache[chat_id]["data"]
+        
+    result = await execute_query("SELECT word FROM filters WHERE chat_id=?", (chat_id,), fetch=True)
+    data = [row["word"] for row in result] if result else []
+    _filters_cache[chat_id] = {"time": current_time, "data": data}
+    return data
+
+async def add_filter(chat_id, word):
+    await execute_query("INSERT OR IGNORE INTO filters (chat_id, word) VALUES (?, ?)", (chat_id, word.lower()))
+    if chat_id in _filters_cache: del _filters_cache[chat_id] # پاک کردن کش
 
 async def is_user_banned(user_id, chat_id):
     result = await execute_query("SELECT is_banned FROM users WHERE user_id=? AND chat_id=?", (user_id, chat_id), fetch=True)
@@ -104,3 +146,33 @@ async def toggle_setting(chat_id, setting_name):
     # آپدیت در دیتابیس
     await execute_query(f"UPDATE groups SET {setting_name}=? WHERE chat_id=?", (new_val, chat_id))
     return new_val
+# services/group_service.py (اضافه شود به انتهای فایل)
+import time
+
+async def mute_user(user_id, chat_id, duration_seconds):
+    """میوت کردن کاربر برای مدت زمان مشخص (Virtual Mute)"""
+    muted_until = int(time.time()) + duration_seconds
+    await execute_query("INSERT OR REPLACE INTO users (user_id, chat_id, is_banned, muted_until) VALUES (?, ?, 0, ?)", (user_id, chat_id, muted_until))
+
+async def unmute_user(user_id, chat_id):
+    """آنمیوت کردن کاربر"""
+    await execute_query("UPDATE users SET muted_until=0 WHERE user_id=? AND chat_id=?", (user_id, chat_id))
+
+async def is_user_muted(user_id, chat_id):
+    """بررسی اینکه آیا کاربر میوت شده است یا خیر"""
+    row = await execute_query("SELECT muted_until FROM users WHERE user_id=? AND chat_id=?", (user_id, chat_id), fetch=True)
+    if row and row[0]["muted_until"] and int(row[0]["muted_until"]) > int(time.time()):
+        return True
+    return False
+
+async def add_mod_log(chat_id, admin_id, action, target_id, reason):
+    """ثبت یک لاگ مدیریتی"""
+    await execute_query(
+        "INSERT INTO moderation_logs (chat_id, admin_id, action, target_id, reason) VALUES (?, ?, ?, ?, ?)",
+        (chat_id, admin_id, action, target_id, reason)
+    )
+
+async def get_mod_logs(chat_id, limit=5):
+    """گرفتن آخرین لاگ‌های مدیریتی"""
+    rows = await execute_query("SELECT * FROM moderation_logs WHERE chat_id=? ORDER BY date DESC LIMIT ?", (chat_id, limit), fetch=True)
+    return rows

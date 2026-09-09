@@ -5,8 +5,7 @@ from core.api_client import send_message, edit_message_text
 
 _active_users = {}
 active_votes = {}
-VOTE_TTL_SECONDS = 30 * 60  # بعد از ۳۰ دقیقه، رأی‌گیری‌های تمام‌نشده از حافظه پاک می‌شوند
-
+VOTE_TTL_SECONDS = 30 * 60
 
 def _prune_expired_votes():
     now = time.time()
@@ -25,13 +24,17 @@ async def track_user(chat_id, user_id, first_name):
 async def handle_who(chat_id):
     users = _active_users.get(chat_id, {})
     if not users:
-        await send_message(chat_id, "🤔 هنوز کسی در گروه پیامی نداده است که بتونم انتخابش کنم!")
+        await send_message(
+            chat_id, 
+            "🤔 هنوز کسی در گروه پیامی نداده است که بتونم انتخابش کنم!\n"
+            "اولین نفر باش و یه پیام بفرست! 💬"
+        )
         return
         
     selected_id = random.choice(list(users.keys()))
     selected_name = users[selected_id]
     
-    text = f"🎲 <b>انتخاب تصادفی!</b>\n\nنفر انتخاب شده برای این کار: <b>{selected_name}</b> 🎉"
+    text = f"🎯 <b>انتخاب تصادفی!</b>\n\nنفر انتخاب شده برای این کار: <b>{selected_name}</b> 🎉"
     await send_message(chat_id, text)
 
 async def handle_vote(chat_id, text, user_id, first_name):
@@ -50,7 +53,12 @@ async def handle_vote(chat_id, text, user_id, first_name):
         ]
     }
     
-    text = f"📊 <b>رأی‌گیری جدید</b>\n\nسوال: <b>{subject}</b>\n\n👤 ایجاد شده توسط: {first_name}\n\nموافقین: 0 | مخالفین: 0"
+    text = (
+        f"📊 <b>رأی‌گیری جدید</b>\n\n"
+        f"سوال: <b>{subject}</b>\n\n"
+        f"👤 ایجاد شده توسط: {first_name}\n\n"
+        f"موافقین: 0 | مخالفین: 0"
+    )
     res = await send_message(chat_id, text, reply_markup=keyboard)
     
     if res and res.get("ok"):
@@ -81,7 +89,12 @@ async def process_vote(chat_id, message_id, user_id, vote_choice):
     else:
         vote_data["no"] += 1
         
-    new_text = f"📊 <b>رأی‌گیری جدید</b>\n\nسوال: <b>{vote_data['subject']}</b>\n\n👤 ایجاد شده توسط: {vote_data['creator']}\n\nموافقین: {vote_data['yes']} | مخالفین: {vote_data['no']}"
+    new_text = (
+        f"📊 <b>رأی‌گیری جدید</b>\n\n"
+        f"سوال: <b>{vote_data['subject']}</b>\n\n"
+        f"👤 ایجاد شده توسط: {vote_data['creator']}\n\n"
+        f"موافقین: {vote_data['yes']} | مخالفین: {vote_data['no']}"
+    )
     
     keyboard = {
         "inline_keyboard": [
@@ -94,18 +107,40 @@ async def process_vote(chat_id, message_id, user_id, vote_choice):
     await edit_message_text(chat_id, message_id, new_text, reply_markup=keyboard)
     return "success"
 
+async def end_vote(chat_id):
+    """پایان دادن به نظرسنجی فعال در گروه"""
+    ended = False
+    for msg_id, vote_data in list(active_votes.items()):
+        if vote_data["chat_id"] == chat_id:
+            # نمایش نتیجه نهایی
+            result_text = (
+                f"📊 <b>نتیجه نهایی رأی‌گیری</b>\n\n"
+                f"سوال: <b>{vote_data['subject']}</b>\n\n"
+                f"✅ موافقین: {vote_data['yes']}\n"
+                f"❌ مخالفین: {vote_data['no']}\n\n"
+                f"🏁 این رأی‌گیری به پایان رسید."
+            )
+            await send_message(chat_id, result_text)
+            del active_votes[msg_id]
+            ended = True
+            
+    return ended
+
+# لیست Truth و Dare
 TRUTHS = [
     "بزرگترین دروغ زندگیت چه بوده؟",
-    "کی رو تو گروه دوست داری ولی جرات نمیکنی بگی؟",
-    "بدترین خاطره مدرسه‌ت چیه؟",
-    "اگه الان یک سوپرپاور داشتی چی میشد؟"
+    "کی رو تو گروه دوست داری ولی جرأت نمی‌کنی بگی؟",
+    "بدترین خاطره مدرسه‌ات چیه؟",
+    "اگه الآن یک سوپرپاور داشتی چی می‌شد؟",
+    "تا حالا عاشق شدی؟"
 ]
 
 DARES = [
     "یک عکس از چهره‌ت بفرست!",
-    "همین الان یک پیام عاشقانه تو گروه بفرست!",
+    "همین الآن یک پیام عاشقانه تو گروه بفرست!",
     "اسم خودت رو برعکس تایپ کن!",
-    "یک آهنگ بخوان و ویسش کن!"
+    "یک آهنگ بخوان و ویسش کن!",
+    "۱۰ تا ایموجی تصادفی بفرست!"
 ]
 
 async def handle_truth(chat_id):

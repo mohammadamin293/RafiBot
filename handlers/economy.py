@@ -65,3 +65,76 @@ async def handle_coinflip(chat_id, text, user_id, first_name):
         text = f"🪙 <b>شیر یا خط!</b>\n\n انتخاب شما: {user_choice}\n نتیجه: {result_text}\n\n😢 متأسفم! شما <b>{bet} سکه</b> باختید."
         
     await send_message(chat_id, text)
+
+from services.economy_service import do_work, do_rob, transfer_coins, buy_item, SHOP_ITEMS
+
+async def handle_work(chat_id, user_id, first_name):
+    success, data = await do_work(user_id, chat_id)
+    if success:
+        await send_message(chat_id, f"💼 <b>{first_name}</b> کار کردی و <b>{data} سکه</b> گرفتی! 💵")
+    else:
+        mins = data // 60
+        await send_message(chat_id, f"⏳ شما خسته هستید! {mins} دقیقه دیگه می‌تونی دوباره کار کنی.")
+
+async def handle_rob(chat_id, message, user_id, first_name):
+    if not message.get("reply_to_message"):
+        await send_message(chat_id, "❌ برای دزدی باید روی پیام یک نفر ریپلای کنی: /rob")
+        return
+        
+    target = message["reply_to_message"]["from"]
+    if target["id"] == user_id:
+        await send_message(chat_id, "❌ نمی‌تونی از خودت بدزدی!")
+        return
+        
+    status, data = await do_rob(user_id, chat_id, target["id"])
+    if status == "cooldown":
+        hours = data // 3600
+        mins = (data % 3600) // 60
+        await send_message(chat_id, f"⏳ پلیس‌ها هنوز تو رو می‌گردن! {hours} ساعت و {mins} دقیقه دیگه امتحان کن.")
+    elif status == "poor_target":
+        await send_message(chat_id, "🤷 این کاربر انقدر فقیره که ارزش دزدی نداره!")
+    elif status == "success":
+        await send_message(chat_id, f"🦹 <b>{first_name}</b> از {target.get('first_name', 'کاربر')} <b>{data} سکه</b> دزدید! 🤑")
+    elif status == "failed":
+        await send_message(chat_id, f"🚨 <b>{first_name}</b> تو دزدی شکست خوردی و <b>{data} سکه</b> جریمه شدی! 👮")
+
+async def handle_give(chat_id, message, text, user_id, first_name):
+    parts = text.split()
+    if len(parts) < 2 or not message.get("reply_to_message"):
+        await send_message(chat_id, "❌ استفاده: روی پیام کاربر ریپلای کن و بنویس /give [مبلغ]")
+        return
+        
+    try:
+        amount = int(parts[1])
+    except ValueError:
+        await send_message(chat_id, "❌ مبلغ باید عدد باشد.")
+        return
+        
+    if amount <= 0:
+        await send_message(chat_id, "❌ مبلغ باید بزرگتر از صفر باشد.")
+        return
+        
+    target = message["reply_to_message"]["from"]
+    success = await transfer_coins(user_id, chat_id, target["id"], amount)
+    if success:
+        await send_message(chat_id, f"💸 <b>{first_name}</b> به {target.get('first_name', 'کاربر')} <b>{amount} سکه</b> هدیه داد! ❤️")
+    else:
+        await send_message(chat_id, "❌ موجودی شما کافی نیست.")
+
+async def handle_shop(chat_id):
+    text = "🛒 <b>فروشگاه رفیبات</b>\n\nبرای خرید، دستور /buy [آیدی آیتم] را بزنید:\n\n"
+    for item_id, info in SHOP_ITEMS.items():
+        text += f"🆔 <code>{item_id}</code>\n📦 {info['name']}\n💰 قیمت: {info['price']} سکه\n➖➖➖➖➖➖\n"
+    await send_message(chat_id, text)
+
+async def handle_buy(chat_id, text, user_id, first_name):
+    parts = text.split()
+    if len(parts) < 2:
+        await send_message(chat_id, "❌ استفاده: /buy [آیدی آیتم]\nمثال: /buy vip_badge")
+        return
+    item_id = parts[1]
+    success, msg = await buy_item(user_id, chat_id, item_id)
+    if success:
+        await send_message(chat_id, f"🎉 <b>{first_name}</b>، شما با موفقیت <b>{msg}</b> را خریدید! به اینونتوری شما اضافه شد.")
+    else:
+        await send_message(chat_id, f"❌ خطا در خرید: {msg}")
