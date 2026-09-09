@@ -14,13 +14,19 @@ async def handle_balance(chat_id, user_id, first_name):
     await send_message(chat_id, text)
 
 async def handle_daily(chat_id, user_id, first_name):
-    success, data = await claim_daily(user_id, chat_id)
+    success, data, streak = await claim_daily(user_id, chat_id)
     if success:
-        text = f"🎁 <b>پاداش روزانه!</b>\n\n{first_name} عزیز، شما <b>{data} سکه</b> دریافت کردید! 💵"
+        reward = data
+        text = (
+            f"🎁 <b>پاداش روزانه!</b>\n\n"
+            f"🎉 {first_name} عزیز، شما <b>{reward} سکه</b> دریافت کردید! 💵\n"
+            f"🔥 استریک شما: <b>{streak} روز</b>\n\n"
+            f"💡 هر روز برگردید تا استریکتان بیشتر شود و سکه‌های بیشتری بگیرید!"
+        )
     else:
-        # محاسبه زمان باقی‌مانده (تبدیل ثانیه به ساعت و دقیقه)
-        hours = data // 3600
-        minutes = (data % 3600) // 60
+        remaining_seconds = data
+        hours = remaining_seconds // 3600
+        minutes = (remaining_seconds % 3600) // 60
         text = f"⏳ <b>شما امروز پاداش خود را گرفته‌اید!</b>\n\nزمان باقی‌مانده برای پاداش بعدی: <b>{hours} ساعت و {minutes} دقیقه</b>"
     await send_message(chat_id, text)
 

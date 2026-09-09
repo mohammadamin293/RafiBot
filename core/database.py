@@ -60,6 +60,18 @@ async def init_db():
     await _add_column_if_missing("groups", "antispam", "BOOLEAN DEFAULT 1")
     await _add_column_if_missing("groups", "filter_enabled", "BOOLEAN DEFAULT 1")
     await _add_column_if_missing("groups", "welcome_enabled", "BOOLEAN DEFAULT 1")
+        # اضافه کردن ستون استریک به صورت امن
+    await _add_column_if_missing("user_stats", "daily_streak", "INTEGER DEFAULT 0")
+    
+    # ساخت جدول دستاوردها (Achievements)
+    await _db_conn.execute('''
+        CREATE TABLE IF NOT EXISTS user_achievements (
+            user_id INTEGER, 
+            chat_id INTEGER, 
+            badge TEXT, 
+            PRIMARY KEY (user_id, chat_id, badge)
+        )
+    ''')
 
 
 async def _add_column_if_missing(table, column, definition):

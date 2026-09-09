@@ -3,6 +3,7 @@ from core.api_client import send_message
 from core.database import execute_query
 from services.group_service import set_welcome, get_welcome, set_rules, get_rules, is_group_premium, set_group_premium
 from services.permission_service import is_group_admin, is_super_admin
+from services.permission_service import is_group_admin
 
 NO_PERMISSION_TEXT = "⛔ این دستور فقط برای ادمین‌های گروه در دسترس است."
 NO_SUPER_PERMISSION_TEXT = "⛔ این دستور فقط برای مالک ربات در دسترس است."
@@ -141,3 +142,16 @@ async def handle_admin_panel(chat_id):
     text = "🛡 <b>پنل مدیریت گروه</b>\n\nبا کلیک روی هر دکمه، آن قابلیت را روشن یا خاموش کنید:"
     from core.api_client import send_message
     await send_message(chat_id, text, reply_markup=get_admin_panel_keyboard(settings))
+    
+async def handle_install(chat_id, user_id):
+    if not await is_group_admin(chat_id, user_id):
+        await send_message(chat_id, "⛔ فقط ادمین گروه می‌تواند ربات را نصب کند.")
+        return
+        
+    text = (
+        "✅ <b>ربات با موفقیت نصب شد!</b>\n\n"
+        "🎉 RafiBot آماده کار است.\n\n"
+        "💡 برای تنظیمات، روی دکمه 🛡 مدیریت در منوی پایین کلیک کنید.\n"
+        "برای دیدن دستورات، /help را بزنید."
+    )
+    await send_message(chat_id, text)

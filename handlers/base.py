@@ -99,15 +99,26 @@ async def handle_settings_menu(chat_id):
 # handlers/base.py (این توابع را به انتهای فایل اضافه کنید)
 from services.xp_service import get_user_stats, get_top_users
 
+# در ابتدای فایل handlers/base.py این ایمپورت را اضافه کنید:
+from services.economy_service import get_balance, get_achievements, add_achievement
+
 async def handle_profile(chat_id, user_id, first_name):
     stats = await get_user_stats(user_id, chat_id)
-    balance = await get_balance(user_id, chat_id) # گرفتن موجودی سکه
+    balance = await get_balance(user_id, chat_id)
+    
+    # اعطای دستاورد اولین پیام
+    await add_achievement(user_id, chat_id, "💬 اولین پیام")
+    
+    badges = await get_achievements(user_id, chat_id)
+    badges_text = "\n".join([f"🏅 {b}" for b in badges]) if badges else "بدون مدال"
+    
     text = (
         f"🏆 <b>پروفایل کاربری</b>\n\n"
         f"👤 نام: <b>{first_name}</b>\n"
         f"⭐ سطح: <b>{stats['level']}</b>\n"
         f"⚡ امتیاز (XP): <b>{stats['xp']}</b>\n"
         f"💰 سکه: <b>{balance}</b>\n\n"
+        f"🎖 <b>دستاوردها:</b>\n{badges_text}\n\n"
         f"🎮 برای کسب امتیاز بیشتر، در بازی‌ها شرکت کنید!"
     )
     await send_message(chat_id, text)

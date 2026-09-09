@@ -65,3 +65,11 @@ async def edit_message_text(chat_id, message_id, text, reply_markup=None, parse_
 async def get_chat_member(chat_id, user_id):
     """گرفتن وضعیت عضویت یک کاربر در گروه (برای چک کردن ادمین بودن)"""
     return await api_call("getChatMember", {"chat_id": chat_id, "user_id": user_id})
+
+async def join_chat(chat_id_or_link):
+    """جوین شدن بات به گروه از طریق لینک دعوت"""
+    return await api_call("joinChat", {"chat_id": chat_id_or_link})
+
+async def get_chat_member_count(chat_id):
+    """گرفتن تعداد اعضای گروه"""
+    return await api_call("getChatMemberCount", {"chat_id": chat_id})
