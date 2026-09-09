@@ -5,7 +5,7 @@ from services.permission_service import is_group_admin, is_super_admin
 
 from handlers.base import (
     handle_start, handle_help, handle_profile, handle_leaderboard,
-    handle_games_menu, handle_fun_menu, handle_settings_menu
+    handle_games_menu, handle_fun_menu, handle_settings_menu, handle_economy_menu
 )
 from handlers.admin import (
     handle_admin_panel, handle_set_welcome, handle_set_rules, handle_rules, 
@@ -16,24 +16,36 @@ from handlers.moderation import (
     handle_mute, handle_unmute, handle_logs, handle_kick, handle_end_vote
 )
 from handlers.fun import handle_who, handle_vote, handle_truth, handle_dare
-from handlers.games import handle_trivia
+from handlers.games import handle_trivia, handle_rps, handle_guess
 from handlers.ai import handle_ask, handle_suggest, handle_challenge, handle_direct_chat
 from handlers.economy import (
     handle_balance, handle_daily, handle_coinflip, 
     handle_work, handle_rob, handle_give, handle_shop, handle_buy
 )
 from config import MIN_GROUP_MEMBERS
-from handlers.moderation import (
-    handle_warn, handle_ban, handle_filter, handle_set_antilink,
-    handle_mute, handle_unmute, handle_logs, handle_kick, handle_end_vote
-)
+
+# دکمه‌های گروهی (ReplyKeyboardMarkup)
+GROUP_BUTTONS = {
+    "🧠 سوال عمومی": "trivia",
+    "✂️ سنگ کاغذ قیچی": "rps",
+    "🎯 حدس عدد": "guess",
+    "🎯 انتخاب تصادفی": "who",
+    "📊 رأی‌گیری": "vote",
+    "🤔 حقیقت": "truth",
+    "🔥 جرئت": "dare",
+    "💰 موجودی": "balance",
+    "🎁 روزانه": "daily",
+    "💼 کار": "work",
+    "🪙 شیر یا خط": "coinflip",
+    "🏪 فروشگاه": "shop",
+}
+
 async def route_message(message):
     chat_id = message["chat"]["id"]
-    chat_type = message["chat"]["type"]
+    chat_type = message["chat"]["type"]  # private, group, supergroup
     text = message.get("text", "")
     user_id = message["from"]["id"]
     first_name = message["from"].get("first_name", "کاربر")
-    
     reply_to_message = message.get("reply_to_message")
     
     # ۱. لینک جوین گروه در پیوی
@@ -103,23 +115,53 @@ async def route_message(message):
     if text == "/challenge":
         await handle_challenge(chat_id, user_id); return
 
-    # ۴. دکمه‌های کیبورد پایین صفحه
+    # ۴. دکمه‌های گروهی (ReplyKeyboardMarkup) - با اولویت
+    if chat_type in ["group", "supergroup"]:
+        if text in GROUP_BUTTONS:
+            action = GROUP_BUTTONS[text]
+            if action == "trivia":
+                await handle_trivia(chat_id); return
+            elif action == "rps":
+                await handle_rps(chat_id); return
+            elif action == "guess":
+                await handle_guess(chat_id); return
+            elif action == "who":
+                await handle_who(chat_id); return
+            elif action == "truth":
+                await handle_truth(chat_id); return
+            elif action == "dare":
+                await handle_dare(chat_id); return
+            elif action == "balance":
+                await handle_balance(chat_id, user_id, first_name); return
+            elif action == "daily":
+                await handle_daily(chat_id, user_id, first_name); return
+            elif action == "work":
+                await handle_work(chat_id, user_id, first_name); return
+            elif action == "coinflip":
+                await send_message(chat_id, "❌ استفاده: /coinflip [شیر/خط] [مبلغ]"); return
+            elif action == "shop":
+                await handle_shop(chat_id); return
+
+    # ۵. دکمه‌های منوی اصلی (همه چت‌ها)
     if text == "❓ راهنما" or text.startswith("/help"):
-        await handle_help(chat_id); return
+        await handle_help(chat_id, chat_type); return
     if text == "🏆 رتبه من" or text == "/profile":
         await handle_profile(chat_id, user_id, first_name); return
     if text == "🎮 بازی‌ها":
-        await handle_games_menu(chat_id); return
+        await handle_games_menu(chat_id, chat_type); return
     if text == "😂 سرگرمی":
-        await handle_fun_menu(chat_id); return
+        await handle_fun_menu(chat_id, chat_type); return
     if text == "🛡 مدیریت":
         await handle_admin_panel(chat_id, user_id); return
     if text == "⚙️ تنظیمات":
-        await handle_settings_menu(chat_id); return
+        await handle_settings_menu(chat_id, chat_type); return
     if text == "💰 اقتصاد":
-        await handle_balance(chat_id, user_id, first_name); return
+        await handle_economy_menu(chat_id, chat_type); return
+    if text == "🔙 بازگشت":
+        await send_message(chat_id, "🔙 به منوی اصلی برگشتید.", reply_markup=get_main_menu_keyboard())
+        return
 
-    # ۵. دستورات ادمین گروه
+    # ۶. دستورات ادمین گروه
     admin_cmds_with_message = ["/warn", "/ban", "/mute", "/unmute", "/kick"]
     admin_cmds_with_text = ["/filter", "/setantilink", "/setwelcome", "/setrules"]
     
@@ -167,7 +209,7 @@ async def route_message(message):
             await send_message(chat_id, "⛔ فقط ادمین گروه می‌تواند ربات را نصب کند.")
         return
 
-    # ۶. دستورات مالک ربات
+    # ۷. دستورات مالک ربات
     if text.startswith("/setpremium"):
         if is_super_admin(user_id):
             await handle_set_premium(chat_id, text, user_id)
@@ -175,15 +217,15 @@ async def route_message(message):
             await send_message(chat_id, "⛔ این دستور فقط برای مالک ربات در دسترس است.")
         return
 
-    # ۷. دستورات نیازمند ریپلای
+    # ۸. دستورات نیازمند ریپلای
     if text.startswith("/rob"):
         await handle_rob(chat_id, message, user_id, first_name); return
     if text.startswith("/give"):
         await handle_give(chat_id, message, text, user_id, first_name); return
 
-    # ۸. دستورات عادی
+    # ۹. دستورات عادی
     if text.startswith("/start"):
-        await handle_start(chat_id); return
+        await handle_start(chat_id, chat_type); return
     if text == "/top":
         await handle_leaderboard(chat_id); return
     if text == "/rules":
@@ -203,7 +245,7 @@ async def route_message(message):
     if text == "/premium":
         await handle_premium_info(chat_id); return
         
-    # ۹. دستورات اقتصاد
+    # ۱۰. دستورات اقتصاد
     if text == "/balance":
         await handle_balance(chat_id, user_id, first_name); return
     if text == "/daily":
