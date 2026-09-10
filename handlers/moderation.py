@@ -11,6 +11,7 @@ from services.group_service import (
 )
 from services.permission_service import is_group_admin
 from core.normalizer import normalize_text
+from core.api_client import send_message, delete_message, send_typing_action, join_chat
 
 MAX_WARNINGS = 3
 MAX_FREE_FILTERS = 3
@@ -223,7 +224,7 @@ async def check_message_violations(chat_id, message):
     
     settings = await get_group_settings(chat_id)
 
-    # ۱. بررسی ضد لینک
+    # ۱. بررسی ضد لینک (برگشت به حالت عادی - پاک کردن لینک‌ها)
     if settings.get("antilink", 1) or settings.get("lock_links", 0):
         url_pattern = re.compile(r'(https?://\S+|www\.\S+|t\.me/\S+|telegram\.me/\S+|splus\.ir/\S+)', re.IGNORECASE)
         if url_pattern.search(text):
@@ -267,7 +268,7 @@ async def check_message_violations(chat_id, message):
         if len(_flood_cache[cache_key]) > FLOOD_LIMIT:
             await delete_message(chat_id, message_id)
             await send_message(chat_id, f"⚠️ کاربر <b>{first_name}</b> به دلیل اسپم محدود شد!")
-            _flood_cache[cache_key] = []
+            _flood_cache[cache_key] = [] 
             
             await add_warning(user_id, chat_id, "اسپم و فلود")
             count = await get_warnings_count(user_id, chat_id)
@@ -276,7 +277,57 @@ async def check_message_violations(chat_id, message):
                 await mute_user(user_id, chat_id, 1800)
                 await send_message(
                     chat_id, 
-                    f"🔇 کاربر <b>{first_name}</b> به دلیل تکرار اسپم و رسیدن به سقف اخطارها، برای ۳۰ دقیقه میوت شد!"
+                    f"🔇 کاربر <b>{first_name}</b> به دلیل تکرار اسپم، برای ۳۰ دقیقه میوت شد!"
+                )
+            return True
+
+    return False
+
+    # ۲. بررسی فیلتر کلمات
+    if settings.get("filter_enabled", 1):
+        filters = await get_filters(chat_id)
+        normalized_text = normalize_text(text)
+        for bad_word in filters:
+            if bad_word in normalized_text:
+                await delete_message(chat_id, message_id)
+                await send_message(chat_id, "🛑 استفاده از کلمات ممنوعه مجاز نیست!")
+                return True
+
+    # ۳. بررسی قفل‌های رسانه‌ای
+    if settings.get("lock_photos", 0) and message.get("photo"):
+        await delete_message(chat_id, message_id)
+        return True
+    if settings.get("lock_videos", 0) and message.get("video"):
+        await delete_message(chat_id, message_id)
+        return True
+    if settings.get("lock_stickers", 0) and message.get("sticker"):
+        await delete_message(chat_id, message_id)
+        return True
+    if settings.get("lock_forward", 0) and (message.get("forward_from") or message.get("forward_from_chat")):
+        await delete_message(chat_id, message_id)
+        return True
+
+    # ۴. بررسی اسپم و فلود
+    if settings.get("antispam", 1):
+        now = time.time()
+        cache_key = (chat_id, user_id)
+        
+        _flood_cache[cache_key] = [t for t in _flood_cache[cache_key] if now - t < FLOOD_WINDOW]
+        _flood_cache[cache_key].append(now)
+        
+        if len(_flood_cache[cache_key]) > FLOOD_LIMIT:
+            await delete_message(chat_id, message_id)
+            await send_message(chat_id, f"⚠️ کاربر <b>{first_name}</b> به دلیل اسپم محدود شد!")
+            _flood_cache[cache_key] = [] 
+            
+            await add_warning(user_id, chat_id, "اسپم و فلود")
+            count = await get_warnings_count(user_id, chat_id)
+            
+            if count >= MAX_WARNINGS:
+                await mute_user(user_id, chat_id, 1800)
+                await send_message(
+                    chat_id, 
+                    f"🔇 کاربر <b>{first_name}</b> به دلیل تکرار اسپم، برای ۳۰ دقیقه میوت شد!"
                 )
             return True
 

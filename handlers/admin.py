@@ -134,7 +134,7 @@ async def handle_group_stats(chat_id, user_id):
         text = (
             "📊 <b>آمار گروه</b>\n\n"
             "🔒 این قابلیت فقط برای گروه‌های <b>Premium</b> در دسترس است.\n\n"
-            "برای ارتقا گروه، با پشتیبانی در ارتباط باشید: @SupportID"
+            "برای ارتقا گروه، با پشتیبانی در ارتباط باشید: @Iambrrr"
         )
         await send_message(chat_id, text)
         return
@@ -163,7 +163,7 @@ async def handle_premium_info(chat_id):
         "🔹 دسترسی به آمار دقیق گروه\n"
         "🔹 بازی‌های اختصاصی بیشتر\n"
         "🔹 هوش مصنوعی پیشرفته\n\n"
-        "برای خرید با پشتیبانی در ارتباط باشید: @SupportID"
+        "برای خرید با پشتیبانی در ارتباط باشید: @Iambrrr"
     )
     await send_message(chat_id, text)
 
@@ -177,5 +177,19 @@ async def handle_install(chat_id, user_id):
         "🎉 RafiBot آماده کار است.\n\n"
         "💡 برای تنظیمات، روی دکمه 🛡 مدیریت در منوی پایین کلیک کنید.\n"
         "برای دیدن دستورات، /help را بزنید."
+    )
+    await send_message(chat_id, text)
+
+async def handle_bot_stats(chat_id, user_id):
+    if not is_super_admin(user_id):
+        return
+        
+    from services.group_service import get_bot_global_stats
+    total_groups, total_users = await get_bot_global_stats()
+    
+    text = (
+        "📊 <b>آمار کلی ربات شما</b>\n\n"
+        f"👥 تعداد کل گروه‌های متصل: <b>{total_groups}</b>\n"
+        f"👤 تعداد کل کاربران ثبت شده: <b>{total_users}</b>\n"
     )
     await send_message(chat_id, text)

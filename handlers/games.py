@@ -1,48 +1,82 @@
 # handlers/games.py
 import random
 import time
-import json
-from core.api_client import send_message
-from core.database import execute_query
+from core.api_client import send_message, edit_message_text
+from services.ai_service import generate_trivia_question
 
-# کش موقت برای سرعت بیشتر
 active_trivias = {}
 TRIVIA_TTL_SECONDS = 10 * 60
 
-TRIVIA_QUESTIONS = [
+# سوالات پیش‌فرض برای زمانی که هوش مصنوعی قطع باشه یا ارور بده
+FALLBACK_QUESTIONS = [
     {"q": "پایتخت ایران کجاست؟", "options": ["تهران", "شیراز", "اصفهان", "مشهد"], "answer": 0},
     {"q": "بزرگترین سیاره منظومه شمسی کدام است؟", "options": ["زمین", "مریخ", "مشتری", "زهره"], "answer": 2},
-    {"q": "نویسنده کتاب شاهنامه کیست؟", "options": ["سعدی", "فردوسی", "حافظ", "مولوی"], "answer": 1},
-    {"q": "چند قاره در زمین وجود دارد؟", "options": ["۵", "۶", "۷", "۸"], "answer": 2},
+    {"q": "نویسنده کتاب شاهنامه کیست؟", "options": ["سعدی", "فردوسی", "حافظ", "مولوی"], "answer": 1}
 ]
 
+def _prune_expired_trivias():
+    now = time.time()
+    expired_ids = [
+        msg_id for msg_id, data in active_trivias.items()
+        if now - data.get("created_at", now) > TRIVIA_TTL_SECONDS
+    ]
+    for msg_id in expired_ids:
+        del active_trivias[msg_id]
+
 async def handle_trivia(chat_id):
-    """شروع مسابقه عمومی"""
-    q = random.choice(TRIVIA_QUESTIONS)
+    """شروع یک مسابقه عمومی با سوال هوش مصنوعی"""
+    _prune_expired_trivias()
+
+    # جلوگیری از شروع دو مسابقه همزمان
+    if any(data["chat_id"] == chat_id for data in active_trivias.values()):
+        await send_message(chat_id, "⏳ یک مسابقه در حال انجام است! لطفاً منتظر بمانید.")
+        return False
+
+    # ارسال پیام اولیه برای جلوگیری از احساس هنگی بات
+    msg_res = await send_message(chat_id, "🧠 <b>مسابقه عمومی!</b>\n\n⏳ هوش مصنوعی در حال طرح سوال است...")
+    
+    # گرفتن سوال از هوش مصنوعی
+    ai_question = await generate_trivia_question()
+    
+    # اگه هوش مصنوعی جواب درست نداد، از سوالات پیش‌فرض استفاده کن
+    if not ai_question:
+        fallback = random.choice(FALLBACK_QUESTIONS)
+        q = fallback["q"]
+        options = fallback["options"]
+        answer_idx = fallback["answer"]
+    else:
+        q = ai_question["question"]
+        options = ai_question["options"]
+        answer_idx = ai_question["answer"]
+
     keyboard = {
         "inline_keyboard": [
             [
-                {"text": f"A) {q['options'][0]}", "callback_data": "trivia_0"},
-                {"text": f"B) {q['options'][1]}", "callback_data": "trivia_1"}
+                {"text": f"A) {options[0]}", "callback_data": "trivia_0"},
+                {"text": f"B) {options[1]}", "callback_data": "trivia_1"}
             ],
             [
-                {"text": f"C) {q['options'][2]}", "callback_data": "trivia_2"},
-                {"text": f"D) {q['options'][3]}", "callback_data": "trivia_3"}
-            ]
+                {"text": f"C) {options[2]}", "callback_data": "trivia_2"},
+                {"text": f"D) {options[3]}", "callback_data": "trivia_3"}
+            ],
+            [{"text": "🔚 پایان مسابقه", "callback_data": "trivia_end"}]
         ]
     }
-    text = f"🧠 <b>مسابقه عمومی!</b>\n\n❓ {q['q']}\n\nبرای پاسخ روی یک گزینه کلیک کن:"
+    text = f"🧠 <b>مسابقه عمومی!</b>\n\n❓ {q}\n\nبرای پاسخ روی یک گزینه کلیک کنید:"
     
-    res = await send_message(chat_id, text, reply_markup=keyboard)
-    
-    if res and res.get("ok"):
-        msg_id = res["result"]["message_id"]
+    # ویرایش پیام اولیه و قرار دادن سوال و دکمه‌ها
+    if msg_res and msg_res.get("ok"):
+        msg_id = msg_res["result"]["message_id"]
+        await edit_message_text(chat_id, msg_id, text, reply_markup=keyboard)
+        
         active_trivias[msg_id] = {
             "chat_id": chat_id,
-            "answer": q["answer"],
+            "answer": answer_idx,
             "answered_by": [],
             "created_at": time.time()
         }
+        return True
+    return False
 
 async def handle_rps(chat_id):
     """بازی سنگ کاغذ قیچی - نسخه گروهی"""
@@ -59,8 +93,5 @@ async def handle_rps(chat_id):
     await send_message(chat_id, text, reply_markup=keyboard)
 
 async def handle_guess(chat_id):
-    """بازی حدس عدد - نسخه گروهی"""
-    number = random.randint(1, 100)
-    # ذخیره در کش موقت
-    # TODO: پیاده‌سازی کامل
-    await send_message(chat_id, f"🎯 یک عدد بین ۱ تا ۱۰۰ حدس بزن!")
+    """بازی حدس عدد"""
+    await send_message(chat_id, "🎯 <b>حدس عدد</b>\n\nاین بخش به‌زودی اضافه خواهد شد!")

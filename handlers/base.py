@@ -49,10 +49,10 @@ def get_economy_reply_keyboard():
         "resize_keyboard": True
     }
 
-# --- کیبوردهای Inline (فقط برای پیوی) ---
+# --- کیبوردهای Inline (برای پیوی) ---
 
 def get_games_inline_keyboard():
-    """کیبورد بازی‌ها برای پیوی (InlineKeyboardMarkup)"""
+    """منوی بازی‌ها"""
     return {
         "inline_keyboard": [
             [{"text": "🧠 سوال عمومی", "callback_data": "game_trivia"}],
@@ -62,16 +62,29 @@ def get_games_inline_keyboard():
         ]
     }
 
-def get_back_inline_keyboard():
-    """دکمه بازگشت برای پیوی"""
+def get_start_inline_keyboard():
+    """کیبورد شروع برای پیوی"""
     return {
         "inline_keyboard": [
-            [{"text": "🔙 بازگشت به منوی اصلی", "callback_data": "main_menu"}]
+            [{"text": "📖 راهنمای کامل", "callback_data": "help_menu"}],
+            [{"text": "💳 خرید Premium", "callback_data": "premium_menu"}]
         ]
     }
 
-def get_help_inline_keyboard():
-    """منوی راهنما برای پیوی"""
+def get_back_keyboard(callback_data="main_menu"):
+    """ساخت دکمه بازگشت با قابلیت تعیین مقصد"""
+    return {
+        "inline_keyboard": [
+            [{"text": "🔙 بازگشت", "callback_data": callback_data}]
+        ]
+    }
+
+def get_back_inline_keyboard():
+    """دکمه بازگشت به منوی اصلی (همان get_back_keyboard)"""
+    return get_back_keyboard()
+
+def get_help_keyboard():
+    """منوی راهنما"""
     return {
         "inline_keyboard": [
             [{"text": "🤖 هوش مصنوعی", "callback_data": "help_ai"}],
@@ -83,6 +96,10 @@ def get_help_inline_keyboard():
         ]
     }
 
+def get_back_to_menu_keyboard():
+    """دکمه بازگشت به منوی اصلی"""
+    return get_back_keyboard()
+
 # --- هندلرهای اصلی ---
 
 async def handle_start(chat_id, chat_type="private"):
@@ -93,16 +110,21 @@ async def handle_start(chat_id, chat_type="private"):
         "👇 از منوی پایین انتخاب کن:"
     )
     await send_message(chat_id, text, reply_markup=get_main_menu_keyboard())
+    await send_message(
+        chat_id, 
+        "✨ برای ادامه روی دکمه زیر کلیک کن:",
+        reply_markup=get_start_inline_keyboard()
+    )
 
 async def handle_help(chat_id, chat_type="private"):
     if chat_type == "private":
         text = "❓ <b>راهنمای رفی‌بات</b>\n\nبرای مشاهده هر بخش، روی دکمه مربوطه کلیک کن:"
-        await send_message(chat_id, text, reply_markup=get_help_inline_keyboard())
+        await send_message(chat_id, text, reply_markup=get_help_keyboard())
     else:
         text = (
             "❓ <b>راهنمای رفی‌بات</b>\n\n"
             "📖 برای مشاهده راهنما، به پیوی بات برو:\n"
-            "https://splus.ir/rafibot\n\n"
+            "@rafibot\n\n"
             "دستورات اصلی:\n"
             "/help - نمایش این پیام\n"
             "/profile - پروفایل شما\n"
@@ -129,15 +151,22 @@ async def handle_fun_menu(chat_id, chat_type="private"):
             "<code>/truth</code> - حقیقت\n"
             "<code>/dare</code> - جرئت"
         )
-        await send_message(chat_id, text, reply_markup=get_back_inline_keyboard())
+        await send_message(chat_id, text, reply_markup=get_back_keyboard())
     else:
         text = "😂 <b>بخش فان</b>\n\nاز دکمه‌های زیر انتخاب کن:"
         await send_message(chat_id, text, reply_markup=get_fun_reply_keyboard())
 
 async def handle_economy_menu(chat_id, chat_type="private"):
     if chat_type == "private":
-        text = "💰 <b>اقتصاد</b>\n\nدستورات:\n/balance - موجودی\n/daily - پاداش روزانه\n/work - کار کردن\n/coinflip - شیر یا خط"
-        await send_message(chat_id, text, reply_markup=get_back_inline_keyboard())
+        text = (
+            "💰 <b>اقتصاد</b>\n\n"
+            "دستورات:\n"
+            "/balance - موجودی\n"
+            "/daily - پاداش روزانه\n"
+            "/work - کار کردن\n"
+            "/coinflip - شیر یا خط"
+        )
+        await send_message(chat_id, text, reply_markup=get_back_keyboard())
     else:
         text = "💰 <b>اقتصاد</b>\n\nاز دکمه‌های زیر انتخاب کن:"
         await send_message(chat_id, text, reply_markup=get_economy_reply_keyboard())
@@ -160,7 +189,7 @@ async def handle_profile(chat_id, user_id, first_name):
         f"🎖 <b>دستاوردها:</b>\n{badges_text}\n\n"
         f"🎮 برای کسب امتیاز بیشتر، در بازی‌ها شرکت کن!"
     )
-    await send_message(chat_id, text, reply_markup=get_back_inline_keyboard())
+    await send_message(chat_id, text, reply_markup=get_back_keyboard())
 
 async def handle_leaderboard(chat_id):
     top_users = await get_top_users(chat_id)
@@ -169,7 +198,7 @@ async def handle_leaderboard(chat_id):
             chat_id, 
             "📊 هنوز کسی در این گروه امتیازی کسب نکرده است.\n"
             "اولین نفر باش! 🚀",
-            reply_markup=get_back_inline_keyboard()
+            reply_markup=get_back_keyboard()
         )
         return
         
@@ -179,7 +208,7 @@ async def handle_leaderboard(chat_id):
     for i, user in enumerate(top_users):
         text += f"{medals[i]} کاربر {user['user_id']} - سطح {user['level']} ({user['xp']} XP)\n"
         
-    await send_message(chat_id, text, reply_markup=get_back_inline_keyboard())
+    await send_message(chat_id, text, reply_markup=get_back_keyboard())
 
 async def handle_settings_menu(chat_id, chat_type="private"):
     text = (
@@ -189,4 +218,15 @@ async def handle_settings_menu(chat_id, chat_type="private"):
         "<code>/setrules [متن]</code>\n"
         "<code>/setantilink [on/off]</code>"
     )
-    await send_message(chat_id, text, reply_markup=get_back_inline_keyboard())
+    await send_message(chat_id, text, reply_markup=get_back_keyboard())
+
+def get_main_inline_keyboard():
+    """کيبرد شیشه‌ای منوی اصلی (برای استفاده داخل منوهای شیشه‌ای)"""
+    return {
+        "inline_keyboard": [
+            [{"text": "🎮 بازی‌ها", "callback_data": "games_menu"}],
+            [{"text": "💰 اقتصاد", "callback_data": "economy_menu"}],
+            [{"text": "📖 راهنما", "callback_data": "help_menu"}],
+            [{"text": "💳 خرید Premium", "callback_data": "premium_menu"}]
+        ]
+    }

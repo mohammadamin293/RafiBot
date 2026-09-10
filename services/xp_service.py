@@ -3,32 +3,48 @@ import time
 from core.database import execute_query
 
 async def add_xp(user_id, chat_id, amount=5):
+    """Add XP with a 30-second anti-spam cooldown."""
     current_time = int(time.time())
-    row = await execute_query("SELECT last_xp_time, xp, level FROM user_stats WHERE user_id=? AND chat_id=?", (user_id, chat_id), fetch=True)
-    
+
+    row = await execute_query(
+        "SELECT last_xp_time, xp, level "
+        "FROM user_stats "
+        "WHERE user_id=? AND chat_id=?",
+        (user_id, chat_id),
+        fetch=True
+    )
+
     if row:
         last_time = row[0]["last_xp_time"]
-        xp = row[0]["xp"]
-        level = row[0]["level"]
-        
-        if current_time - last_time < 30:
-            return False # امتیاز نگرفت
-            
+        xp = row[0]["xp"] or 0
+        level = row[0]["level"] or 1
+
+        # If there is no previous XP timestamp,
+        # treat this as the first XP award.
+        if last_time is not None:
+            if current_time - last_time < 30:
+                return False
+
         new_xp = xp + amount
         new_level = (new_xp // 100) + 1
-        
+
         await execute_query(
-            "UPDATE user_stats SET xp=?, level=?, last_xp_time=? WHERE user_id=? AND chat_id=?", 
+            "UPDATE user_stats "
+            "SET xp=?, level=?, last_xp_time=? "
+            "WHERE user_id=? AND chat_id=?",
             (new_xp, new_level, current_time, user_id, chat_id)
         )
-        return new_level > level # اگر لول بالا رفت True می‌دهد
-    else:
-        await execute_query(
-            "INSERT INTO user_stats (user_id, chat_id, xp, level, last_xp_time) VALUES (?, ?, ?, ?, ?)",
-            (user_id, chat_id, amount, 1, current_time)
-        )
-    return False
 
+        return new_level > level
+
+    await execute_query(
+        "INSERT INTO user_stats "
+        "(user_id, chat_id, xp, level, last_xp_time) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (user_id, chat_id, amount, 1, current_time)
+    )
+
+    return False
 async def get_user_stats(user_id, chat_id):
     row = await execute_query("SELECT xp, level FROM user_stats WHERE user_id=? AND chat_id=?", (user_id, chat_id), fetch=True)
     if row:

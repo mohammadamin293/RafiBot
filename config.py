@@ -13,3 +13,6 @@ AVALAI_API_KEY = os.getenv("AVALAI_API_KEY", "")
 MIN_GROUP_MEMBERS = int(os.getenv("MIN_GROUP_MEMBERS", "10"))
 AI_RATE_LIMIT = int(os.getenv("AI_RATE_LIMIT", "5"))  # تعداد درخواست در دقیقه
 MAX_AI_PROMPT_LENGTH = int(os.getenv("MAX_AI_PROMPT_LENGTH", "1000"))
+OWNER_USERNAME = "Iambrrr"  # یوزرنیم شما بدون @
+AVALAI_API_KEY = os.getenv("AVALAI_API_KEY", "")
+MIN_GROUP_MEMBERS = int(os.getenv("MIN_GROUP_MEMBERS", "10"))

@@ -10,6 +10,7 @@ from handlers.admin import handle_new_member, handle_left_member
 from handlers.callbacks import handle_callback_query
 from core.router import route_message
 from handlers.moderation import check_message_violations
+from core.api_client import api_call
 
 logging.basicConfig(
     level=logging.INFO,
@@ -91,6 +92,45 @@ async def main():
     logging.info("Initializing Database...")
     await init_db()
     
+    # ---- تنظیم منوی کشویی کامندها (دکمه پایین چت) ----
+    commands = [
+        {"command": "start", "description": "شروع کار با بات"},
+        {"command": "help", "description": "دریافت راهنمای کامل"},
+        {"command": "profile", "description": "مشاهده پروفایل و امتیاز"},
+        {"command": "top", "description": "لیست برترین اعضا"},
+        {"command": "balance", "description": "مشاهده موجودی سکه"},
+        {"command": "daily", "description": "دریافت پاداش روزانه"},
+        {"command": "work", "description": "کار کردن برای کسب سکه"},
+        {"command": "coinflip", "description": "شرط‌بندی شیر یا خط"},
+        {"command": "rob", "description": "دزدی سکه (ریپلای روی کاربر)"},
+        {"command": "give", "description": "هدیه دادن سکه (ریپلای روی کاربر)"},
+        {"command": "shop", "description": "مشاهده فروشگاه"},
+        {"command": "buy", "description": "خرید آیتم از فروشگاه"},
+        {"command": "trivia", "description": "شروع مسابقه عمومی"},
+        {"command": "who", "description": "انتخاب یک نفر تصادفی"},
+        {"command": "vote", "description": "ایجاد نظرسنجی"},
+        {"command": "endvote", "description": "پایان نظرسنجی فعال"},
+        {"command": "truth", "description": "سوال حقیقت"},
+        {"command": "dare", "description": "چالش جرئت"},
+        {"command": "rules", "description": "مشاهده قوانین گروه"},
+        {"command": "warn", "description": "اخطار به کاربر (ریپلای)"},
+        {"command": "mute", "description": "میوت کردن (ریپلای)"},
+        {"command": "unmute", "description": "آزاد کردن (ریپلای)"},
+        {"command": "ban", "description": "بن مجازی (ریپلای)"},
+        {"command": "kick", "description": "اخراج از گروه (ریپلای)"},
+        {"command": "filter", "description": "مسدود کردن کلمه"},
+        {"command": "setwelcome", "description": "تنظیم خوش‌آمدگویی"},
+        {"command": "setrules", "description": "تنظیم قوانین گروه"},
+        {"command": "setantilink", "description": "روشن/خاموش آنتی‌لینک"},
+        {"command": "logs", "description": "اقدامات ادمین‌ها"},
+        {"command": "install", "description": "نصب ربات در گروه"},
+        {"command": "premium", "description": "وضعیت پریمیوم گروه"},
+        {"command": "botstats", "description": "آمار کلی ربات (فقط مالک)"}
+    ]
+    await api_call("setMyCommands", {"commands": commands})
+    logging.info("Bot commands menu updated!")
+    # ------------------------------------------------
+    
     # شروع تایمر ذخیره دیتابیس
     asyncio.create_task(db_commit_task())
     
@@ -106,25 +146,24 @@ async def main():
             payload = {
                 "offset": offset, 
                 "timeout": 30, 
-                "allowed_updates": ["message", "edited_message", "callback_query"]
+                "allowed_updates": ["message", "callback_query"]
             }
             updates = await api_call("getUpdates", payload)
-            if "message" in update:
-                await message_queue.put(("message", update["message"]))
-            elif "edited_message" in update:
-                # پیام ویرایش شده را به عنوان پیام معمولی پردازش کن
-                await message_queue.put(("message", update["edited_message"]))
-            elif "callback_query" in update:
-                await message_queue.put(("callback", update["callback_query"]))
-            if updates and updates.get("ok"):
+            
+            # بررسی اینکه updates معتبر است و result دارد
+            if updates and isinstance(updates, dict) and updates.get("ok") and updates.get("result"):
                 for update in updates["result"]:
                     offset = update["update_id"] + 1
                     if "message" in update:
                         await message_queue.put(("message", update["message"]))
+                    elif "edited_message" in update:
+                        await message_queue.put(("message", update["edited_message"]))
                     elif "callback_query" in update:
                         await message_queue.put(("callback", update["callback_query"]))
             else:
-                # جلوگیری از Busy Loop در صورت قطعی سرور
+                # اگر خطایی از API برگشت یا result خالی بود
+                error_msg = updates.get("description", "Unknown error") if updates else "No response"
+                logging.warning(f"No updates or API error: {error_msg}")
                 await asyncio.sleep(1)
                 
         except Exception as e:

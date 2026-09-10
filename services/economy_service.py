@@ -23,16 +23,16 @@ async def claim_daily(user_id, chat_id):
         last_claim = row[0]["last_daily"]
         current_streak = row[0]["daily_streak"]
         
-        # ۲۴ ساعت بر حسب ثانیه
-        if now - last_claim < 86400:
-            remaining_seconds = 86400 - (now - last_claim)
+        # ۱۲ ساعت بر حسب ثانیه (43200 ثانیه)
+        if now - last_claim < 43200:
+            remaining_seconds = 43200 - (now - last_claim)
             return False, remaining_seconds, current_streak
             
-        # اگر بین ۲۴ تا ۴۸ ساعت گذشته باشه، استریک حفظ میشه
-        if now - last_claim < 172800:
+        # اگر بین ۱۲ تا ۲۴ ساعت گذشته باشه، استریک حفظ میشه (86400 ثانیه)
+        if now - last_claim < 86400:
             new_streak = current_streak + 1
         else:
-            new_streak = 1 # اگر بیشتر از ۴۸ ساعت گذشت، استریک ریست میشه
+            new_streak = 1 # اگر بیشتر از ۲۴ ساعت گذشت، استریک ریست میشه
     else:
         new_streak = 1 # اولین بار
         
