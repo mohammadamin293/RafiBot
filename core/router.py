@@ -201,7 +201,7 @@ async def route_message(message):
     # ۹. دستورات مالک ربات (سوپر ادمین)
     if text.startswith("/setpremium"):
         if is_super_admin(user_id, username):  # <-- username اضافه شد
-            await handle_set_premium(chat_id, text, user_id)
+            await handle_set_premium(chat_id, text, user_id, username)
         else:
             await send_message(chat_id, "⛔ این دستور فقط برای مالک ربات در دسترس است.")
         return
@@ -247,12 +247,6 @@ async def route_message(message):
         await handle_shop(chat_id); return
     if text.startswith("/buy"):
         await handle_buy(chat_id, text, user_id, first_name); return
-    if text.startswith("/setpremium"):
-        if is_super_admin(user_id):
-            await handle_set_premium(chat_id, text, user_id)
-        else:
-            await send_message(chat_id, "⛔ این دستور فقط برای مالک ربات در دسترس است.")
-        return
         
     # --- دستور مشاهده آمار ربات ---
     if text == "/botstats":

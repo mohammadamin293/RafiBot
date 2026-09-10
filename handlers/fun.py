@@ -16,10 +16,16 @@ def _prune_expired_votes():
     for msg_id in expired_ids:
         del active_votes[msg_id]
 
-async def track_user(chat_id, user_id, first_name):
+async def track_user(chat_id, user_id, first_name, username=""):
     if chat_id not in _active_users:
         _active_users[chat_id] = {}
     _active_users[chat_id][user_id] = first_name
+    
+    # ذخیره یوزرنیم در دیتابیس
+    if username:
+        from core.database import execute_query
+        await execute_query("INSERT OR IGNORE INTO user_stats (user_id, chat_id) VALUES (?, ?)", (user_id, chat_id))
+        await execute_query("UPDATE user_stats SET username=? WHERE user_id=? AND chat_id=?", (username, user_id, chat_id))
 
 async def handle_who(chat_id):
     users = _active_users.get(chat_id, {})

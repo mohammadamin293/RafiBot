@@ -107,22 +107,31 @@ async def handle_left_member(chat_id, left_member):
     text = f"👋 خداحافظ <b>{left_name}</b>! امیدواریم دوباره برگردی."
     await send_message(chat_id, text)
 
-async def handle_set_premium(chat_id, text, user_id):
-    if not is_super_admin(user_id):
+async def handle_set_premium(chat_id, text, user_id, username=None):
+    if not is_super_admin(user_id, username):
         await send_message(chat_id, NO_SUPER_PERMISSION_TEXT)
         return
 
     parts = text.split(" ", 1)
+
     if len(parts) < 2 or parts[1].strip().lower() not in ["on", "off"]:
         await send_message(chat_id, "❌ استفاده: /setpremium [on/off]")
         return
 
     status = parts[1].strip().lower() == "on"
+
     await set_group_premium(chat_id, status)
+
     if status:
-        await send_message(chat_id, "💎 این گروه الآن Premium شد! تمام محدودیت‌ها برداشته شد.")
+        await send_message(
+            chat_id,
+            "💎 این گروه الآن Premium شد! تمام محدودیت‌ها برداشته شد."
+        )
     else:
-        await send_message(chat_id, "⬇️ این گروه به نسخه رایگان برگشت.")
+        await send_message(
+            chat_id,
+            "⬇️ این گروه به نسخه رایگان برگشت."
+        )
 
 async def handle_group_stats(chat_id, user_id):
     if not await is_group_admin(chat_id, user_id):
@@ -181,15 +190,36 @@ async def handle_install(chat_id, user_id):
     await send_message(chat_id, text)
 
 async def handle_bot_stats(chat_id, user_id):
-    if not is_super_admin(user_id):
-        return
-        
+    # چون این دستور قبلاً در router.py چک شده که شما اونر هستید، اینجا دیگه چک نمیکنیم
+    
     from services.group_service import get_bot_global_stats
-    total_groups, total_users = await get_bot_global_stats()
+    groups, users = await get_bot_global_stats()
     
     text = (
         "📊 <b>آمار کلی ربات شما</b>\n\n"
-        f"👥 تعداد کل گروه‌های متصل: <b>{total_groups}</b>\n"
-        f"👤 تعداد کل کاربران ثبت شده: <b>{total_users}</b>\n"
+        f"👥 تعداد کل گروه‌های متصل: <b>{len(groups)}</b>\n"
+        f"👤 تعداد کل کاربران ثبت شده: <b>{len(users)}</b>\n\n"
     )
+    
+    # نمایش لیست گروه‌ها (فقط ۵۰ گروه اول)
+    text += "<b>📋 لیست گروه‌ها (آیدی‌ها):</b>\n"
+    for g in groups[:50]:
+        text += f"• <code>{g['chat_id']}</code>\n"
+        
+    # نمایش لیست کاربران (لینک‌دار بر اساس یوزرنیم یا آیدی، فقط ۱۰۰ کاربر اول)
+    text += "\n<b>👤 لیست کاربران:</b>\n"
+    for u in users[:100]:
+        user_id = u["user_id"]
+        username = u["username"] if u["username"] else None
+        
+        # اگه کاربر یوزرنیم داشت، یوزرنیم رو نشون میده، اگه نداشت آیدی عددی رو نشون میده
+        display_name = f"@{username}" if username else f"{user_id}"
+        
+        # ساخت لینک قابل کلیک (با کلیک روی اسم میره تو پروفایل)
+        user_link = f"<a href=\"tg://user?id={user_id}\">{display_name}</a>"
+        text += f"• {user_link}\n"
+        
+    if len(users) > 100:
+        text += "\n<i>(برای جلوگیری از طولانی شدن پیام، فقط ۱۰۰ کاربر اول نمایش داده شدند)</i>"
+        
     await send_message(chat_id, text)

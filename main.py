@@ -61,6 +61,7 @@ async def process_message(message):
         leveled_up = await add_xp(user_id, chat_id, 5)
         await increment_message_count(chat_id)
         await track_user(chat_id, user_id, first_name)
+        await track_user(chat_id, user_id, first_name, username)
         
         # پیام سطح‌آپ
         if leveled_up:

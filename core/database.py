@@ -63,6 +63,7 @@ async def init_db():
             daily_streak INTEGER DEFAULT 0,
             last_work TIMESTAMP DEFAULT 0,
             last_rob TIMESTAMP DEFAULT 0,
+            username TEXT,
             PRIMARY KEY (user_id, chat_id)
         );
         
@@ -99,8 +100,19 @@ async def init_db():
         );
     ''')
     
+    # اضافه کردن ستون یوزرنیم برای دیتابیس‌های قدیمی
+    await _add_column_if_missing("user_stats", "username", "TEXT")
+    
     await _db_conn.commit()
     logging.info("Database initialized successfully")
+
+async def _add_column_if_missing(table, column, definition):
+    """ALTER TABLE امن: اگر ستون وجود نداشت اضافه میکند."""
+    try:
+        await _db_conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+    except sqlite3.OperationalError as e:
+        if "duplicate column" not in str(e).lower():
+            logging.error(f"Unexpected error adding column {column} to {table}: {e}")
 
 async def execute_query(query, params=(), fetch=False):
     if not _db_conn: 

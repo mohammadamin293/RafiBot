@@ -168,11 +168,8 @@ async def get_mod_logs(chat_id, limit=5):
 
 
 async def get_bot_global_stats():
-    """گرفتن آمار کلی ربات برای مالک"""
-    total_groups = await execute_query("SELECT COUNT(*) as count FROM groups", fetch=True)
-    total_users = await execute_query("SELECT COUNT(*) as count FROM user_stats", fetch=True)
+    """گرفتن لیست گروه‌ها و کاربران برای مالک ربات"""
+    groups = await execute_query("SELECT chat_id FROM groups", fetch=True)
+    users = await execute_query("SELECT user_id, username FROM user_stats", fetch=True)
     
-    g_count = total_groups[0]["count"] if total_groups else 0
-    u_count = total_users[0]["count"] if total_users else 0
-    
-    return g_count, u_count
+    return groups, users

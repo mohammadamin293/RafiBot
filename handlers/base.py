@@ -206,7 +206,10 @@ async def handle_leaderboard(chat_id):
     medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
     
     for i, user in enumerate(top_users):
-        text += f"{medals[i]} کاربر {user['user_id']} - سطح {user['level']} ({user['xp']} XP)\n"
+        # ساخت لینک قابل کلیک برای آیدی کاربر
+        # وقتی روش کلیک کنی، مستقیم پروفایلش باز میشه
+        user_link = f"<a href=\"tg://user?id={user['user_id']}\">کاربر {user['user_id']}</a>"
+        text += f"{medals[i]} {user_link} - سطح {user['level']} ({user['xp']} XP)\n"
         
     await send_message(chat_id, text, reply_markup=get_back_keyboard())
 

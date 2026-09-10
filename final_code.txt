@@ -1,0 +1,2818 @@
+﻿===== START OF PROJECT =====
+===== config.py =====
+
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+BOT_TOKEN = os.getenv("SOUROUSH_BOT_TOKEN")
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
+DB_PATH = os.getenv("DATABASE_PATH", "rafibot.db")
+API_BASE_URL = f"https://api.splus.ir/bot{BOT_TOKEN}/"
+AVALAI_API_KEY = os.getenv("AVALAI_API_KEY", "")
+
+# ØªÙ†Ø¸ÛŒÙ…Ø§Øª Ø¬Ø¯ÛŒØ¯
+MIN_GROUP_MEMBERS = int(os.getenv("MIN_GROUP_MEMBERS", "10"))
+AI_RATE_LIMIT = int(os.getenv("AI_RATE_LIMIT", "5"))  # ØªØ¹Ø¯Ø§Ø¯ Ø¯Ø±Ø®ÙˆØ§Ø³Øª Ø¯Ø± Ø¯Ù‚ÛŒÙ‚Ù‡
+MAX_AI_PROMPT_LENGTH = int(os.getenv("MAX_AI_PROMPT_LENGTH", "1000"))
+OWNER_USERNAME = "Iambrrr"  # ÛŒÙˆØ²Ø±Ù†ÛŒÙ… Ø´Ù…Ø§ Ø¨Ø¯ÙˆÙ† @
+AVALAI_API_KEY = os.getenv("AVALAI_API_KEY", "")
+MIN_GROUP_MEMBERS = int(os.getenv("MIN_GROUP_MEMBERS", "10"))
+
+
+===== main.py =====
+
+# main.py
+import asyncio
+import logging
+from core.api_client import api_call, delete_message, send_message
+from core.database import init_db, db_commit_task
+from services.group_service import is_user_banned, is_user_muted, increment_message_count
+from services.xp_service import add_xp, get_user_stats
+from handlers.fun import track_user
+from handlers.admin import handle_new_member, handle_left_member
+from handlers.callbacks import handle_callback_query
+from core.router import route_message
+from handlers.moderation import check_message_violations
+from core.api_client import api_call
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+
+# Ù…ØªÙ† Ø¯Ú©Ù…Ù‡â€ŒÙ‡Ø§ÛŒ Ù…Ù†Ùˆ
+MENU_BUTTON_TEXTS = ["ðŸŽ® Ø¨Ø§Ø²ÛŒâ€ŒÙ‡Ø§", "ðŸ† Ø±ØªØ¨Ù‡ Ù…Ù†", "ðŸ˜‚ Ø³Ø±Ú¯Ø±Ù…ÛŒ", "ðŸ›¡ Ù…Ø¯ÛŒØ±ÛŒØª", "âš™ï¸ ØªÙ†Ø¸ÛŒÙ…Ø§Øª", "â“ Ø±Ø§Ù‡Ù†Ù…Ø§", "ðŸ’° Ø§Ù‚ØªØµØ§Ø¯"]
+
+# ØµÙ Ù¾Ø±Ø¯Ø§Ø²Ø´ Ù¾ÛŒØ§Ù…â€ŒÙ‡Ø§ Ùˆ Ø¯Ú©Ù…Ù‡â€ŒÙ‡Ø§
+message_queue = asyncio.Queue()
+
+async def process_message(message):
+    chat_id = message["chat"]["id"]
+    text = message.get("text", "")
+    user_id = message["from"]["id"]
+    first_name = message["from"].get("first_name", "Ú©Ø§Ø±Ø¨Ø±")
+
+    # Ø¹Ø¶Ùˆ Ø¬Ø¯ÛŒØ¯
+    if "new_chat_members" in message:
+        for new_member in message["new_chat_members"]:
+            if not new_member.get("is_bot"):
+                await handle_new_member(chat_id, new_member)
+        return
+        
+    # Ø®Ø±ÙˆØ¬ Ø¹Ø¶Ùˆ
+    if "left_chat_member" in message:
+        left_member = message["left_chat_member"]
+        if not left_member.get("is_bot"):
+            await handle_left_member(chat_id, left_member)
+        return
+
+    # Ø¨Ø±Ø±Ø³ÛŒ Ø¨Ù† Ùˆ Ù…ÛŒÙˆØª
+    if await is_user_banned(user_id, chat_id):
+        await delete_message(chat_id, message["message_id"])
+        return
+        
+    if await is_user_muted(user_id, chat_id):
+        await delete_message(chat_id, message["message_id"])
+        return
+
+    # Ø¨Ø±Ø±Ø³ÛŒ ØªØ®Ù„ÙØ§Øª
+    if await check_message_violations(chat_id, message):
+        return
+
+    # Ø§ÙØ²ÙˆØ¯Ù† XP Ø¨Ø±Ø§ÛŒ Ù¾ÛŒØ§Ù…â€ŒÙ‡Ø§ÛŒ Ø¹Ø§Ø¯ÛŒ
+    if not text.startswith("/") and text not in MENU_BUTTON_TEXTS:
+        leveled_up = await add_xp(user_id, chat_id, 5)
+        await increment_message_count(chat_id)
+        await track_user(chat_id, user_id, first_name)
+        
+        # Ù¾ÛŒØ§Ù… Ø³Ø·Ø­â€ŒØ¢Ù¾
+        if leveled_up:
+            stats = await get_user_stats(user_id, chat_id)
+            await send_message(
+                chat_id, 
+                f"ðŸŽ‰ ØªØ¨Ø±ÛŒÚ© <b>{first_name}</b>!\n"
+                f"Ø´Ù…Ø§ Ø¨Ù‡ <b>Level {stats['level']}</b> Ø±Ø³ÛŒØ¯ÛŒØ¯! ðŸš€"
+            )
+
+    # Ù‡Ø¯Ø§ÛŒØª Ø¨Ù‡ Ù…Ø³ÛŒØ±ÛŒØ§Ø¨
+    await route_message(message)
+
+async def worker():
+    """Ú©Ø§Ø±Ú¯Ø± Ø¨Ø±Ø§ÛŒ Ù¾Ø±Ø¯Ø§Ø²Ø´ Ø¢ÛŒØªÙ…â€ŒÙ‡Ø§ÛŒ Ø¯Ø§Ø®Ù„ ØµÙ"""
+    while True:
+        item_type, item_data = await message_queue.get()
+        try:
+            if item_type == "message":
+                await process_message(item_data)
+            elif item_type == "callback":
+                await handle_callback_query(item_data)
+        except Exception as e:
+            logging.error(f"Error processing {item_type}: {e}")
+        finally:
+            message_queue.task_done()
+
+async def main():
+    logging.info("Initializing Database...")
+    await init_db()
+    
+    # ---- ØªÙ†Ø¸ÛŒÙ… Ù…Ù†ÙˆÛŒ Ú©Ø´ÙˆÛŒÛŒ Ú©Ø§Ù…Ù†Ø¯Ù‡Ø§ (Ø¯Ú©Ù…Ù‡ Ù¾Ø§ÛŒÛŒÙ† Ú†Øª) ----
+    commands = [
+        {"command": "start", "description": "Ø´Ø±ÙˆØ¹ Ú©Ø§Ø± Ø¨Ø§ Ø¨Ø§Øª"},
+        {"command": "help", "description": "Ø¯Ø±ÛŒØ§ÙØª Ø±Ø§Ù‡Ù†Ù…Ø§ÛŒ Ú©Ø§Ù…Ù„"},
+        {"command": "profile", "description": "Ù…Ø´Ø§Ù‡Ø¯Ù‡ Ù¾Ø±ÙˆÙØ§ÛŒÙ„ Ùˆ Ø§Ù…ØªÛŒØ§Ø²"},
+        {"command": "top", "description": "Ù„ÛŒØ³Øª Ø¨Ø±ØªØ±ÛŒÙ† Ø§Ø¹Ø¶Ø§"},
+        {"command": "balance", "description": "Ù…Ø´Ø§Ù‡Ø¯Ù‡ Ù…ÙˆØ¬ÙˆØ¯ÛŒ Ø³Ú©Ù‡"},
+        {"command": "daily", "description": "Ø¯Ø±ÛŒØ§ÙØª Ù¾Ø§Ø¯Ø§Ø´ Ø±ÙˆØ²Ø§Ù†Ù‡"},
+        {"command": "work", "description": "Ú©Ø§Ø± Ú©Ø±Ø¯Ù† Ø¨Ø±Ø§ÛŒ Ú©Ø³Ø¨ Ø³Ú©Ù‡"},
+        {"command": "coinflip", "description": "Ø´Ø±Ø·â€ŒØ¨Ù†Ø¯ÛŒ Ø´ÛŒØ± ÛŒØ§ Ø®Ø·"},
+        {"command": "rob", "description": "Ø¯Ø²Ø¯ÛŒ Ø³Ú©Ù‡ (Ø±ÛŒÙ¾Ù„Ø§ÛŒ Ø±ÙˆÛŒ Ú©Ø§Ø±Ø¨Ø±)"},
+        {"command": "give", "description": "Ù‡Ø¯ÛŒÙ‡ Ø¯Ø§Ø¯Ù† Ø³Ú©Ù‡ (Ø±ÛŒÙ¾Ù„Ø§ÛŒ Ø±ÙˆÛŒ Ú©Ø§Ø±Ø¨Ø±)"},
+        {"command": "shop", "description": "Ù…Ø´Ø§Ù‡Ø¯Ù‡ ÙØ±ÙˆØ´Ú¯Ø§Ù‡"},
+        {"command": "buy", "description": "Ø®Ø±ÛŒØ¯ Ø¢ÛŒØªÙ… Ø§Ø² ÙØ±ÙˆØ´Ú¯Ø§Ù‡"},
+        {"command": "trivia", "description": "Ø´Ø±ÙˆØ¹ Ù…Ø³Ø§Ø¨Ù‚Ù‡ Ø¹Ù…ÙˆÙ…ÛŒ"},
+        {"command": "who", "description": "Ø§Ù†ØªØ®Ø§Ø¨ ÛŒÚ© Ù†ÙØ± ØªØµØ§Ø¯ÙÛŒ"},
+        {"command": "vote", "description": "Ø§ÛŒØ¬Ø§Ø¯ Ù†Ø¸Ø±Ø³Ù†Ø¬ÛŒ"},
+        {"command": "endvote", "description": "Ù¾Ø§ÛŒØ§Ù† Ù†Ø¸Ø±Ø³Ù†Ø¬ÛŒ ÙØ¹Ø§Ù„"},
+        {"command": "truth", "description": "Ø³ÙˆØ§Ù„ Ø­Ù‚ÛŒÙ‚Øª"},
+        {"command": "dare", "description": "Ú†Ø§Ù„Ø´ Ø¬Ø±Ø¦Øª"},
+        {"command": "rules", "description": "Ù…Ø´Ø§Ù‡Ø¯Ù‡ Ù‚ÙˆØ§Ù†ÛŒÙ† Ú¯Ø±ÙˆÙ‡"},
+        {"command": "warn", "description": "Ø§Ø®Ø·Ø§Ø± Ø¨Ù‡ Ú©Ø§Ø±Ø¨Ø± (Ø±ÛŒÙ¾Ù„Ø§ÛŒ)"},
+        {"command": "mute", "description": "Ù…ÛŒÙˆØª Ú©Ø±Ø¯Ù† (Ø±ÛŒÙ¾Ù„Ø§ÛŒ)"},
+        {"command": "unmute", "description": "Ø¢Ø²Ø§Ø¯ Ú©Ø±Ø¯Ù† (Ø±ÛŒÙ¾Ù„Ø§ÛŒ)"},
+        {"command": "ban", "description": "Ø¨Ù† Ù…Ø¬Ø§Ø²ÛŒ (Ø±ÛŒÙ¾Ù„Ø§ÛŒ)"},
+        {"command": "kick", "description": "Ø§Ø®Ø±Ø§Ø¬ Ø§Ø² Ú¯Ø±ÙˆÙ‡ (Ø±ÛŒÙ¾Ù„Ø§ÛŒ)"},
+        {"command": "filter", "description": "Ù…Ø³Ø¯ÙˆØ¯ Ú©Ø±Ø¯Ù† Ú©Ù„Ù…Ù‡"},
+        {"command": "setwelcome", "description": "ØªÙ†Ø¸ÛŒÙ… Ø®ÙˆØ´â€ŒØ¢Ù…Ø¯Ú¯ÙˆÛŒÛŒ"},
+        {"command": "setrules", "description": "ØªÙ†Ø¸ÛŒÙ… Ù‚ÙˆØ§Ù†ÛŒÙ† Ú¯Ø±ÙˆÙ‡"},
+        {"command": "setantilink", "description": "Ø±ÙˆØ´Ù†/Ø®Ø§Ù…ÙˆØ´ Ø¢Ù†ØªÛŒâ€ŒÙ„ÛŒÙ†Ú©"},
+        {"command": "logs", "description": "Ø§Ù‚Ø¯Ø§Ù…Ø§Øª Ø§Ø¯Ù…ÛŒÙ†â€ŒÙ‡Ø§"},
+        {"command": "install", "description": "Ù†ØµØ¨ Ø±Ø¨Ø§Øª Ø¯Ø± Ú¯Ø±ÙˆÙ‡"},
+        {"command": "premium", "description": "ÙˆØ¶Ø¹ÛŒØª Ù¾Ø±ÛŒÙ…ÛŒÙˆÙ… Ú¯Ø±ÙˆÙ‡"},
+        {"command": "botstats", "description": "Ø¢Ù…Ø§Ø± Ú©Ù„ÛŒ Ø±Ø¨Ø§Øª (ÙÙ‚Ø· Ù…Ø§Ù„Ú©)"}
+    ]
+    await api_call("setMyCommands", {"commands": commands})
+    logging.info("Bot commands menu updated!")
+    # ------------------------------------------------
+    
+    # Ø´Ø±ÙˆØ¹ ØªØ§ÛŒÙ…Ø± Ø°Ø®ÛŒØ±Ù‡ Ø¯ÛŒØªØ§Ø¨ÛŒØ³
+    asyncio.create_task(db_commit_task())
+    
+    # Ø´Ø±ÙˆØ¹ Û³ Ú©Ø§Ø±Ú¯Ø± Ø¨Ø±Ø§ÛŒ Ù¾Ø±Ø¯Ø§Ø²Ø´ Ù…ÙˆØ§Ø²ÛŒ
+    for _ in range(3):
+        asyncio.create_task(worker())
+    
+    logging.info("RafiBot Async is starting...")
+    offset = 0
+    
+    while True:
+        try:
+            payload = {
+                "offset": offset, 
+                "timeout": 30, 
+                "allowed_updates": ["message", "callback_query"]
+            }
+            updates = await api_call("getUpdates", payload)
+            
+            # Ø¨Ø±Ø±Ø³ÛŒ Ø§ÛŒÙ†Ú©Ù‡ updates Ù…Ø¹ØªØ¨Ø± Ø§Ø³Øª Ùˆ result Ø¯Ø§Ø±Ø¯
+            if updates and isinstance(updates, dict) and updates.get("ok") and updates.get("result"):
+                for update in updates["result"]:
+                    offset = update["update_id"] + 1
+                    if "message" in update:
+                        await message_queue.put(("message", update["message"]))
+                    elif "edited_message" in update:
+                        await message_queue.put(("message", update["edited_message"]))
+                    elif "callback_query" in update:
+                        await message_queue.put(("callback", update["callback_query"]))
+            else:
+                # Ø§Ú¯Ø± Ø®Ø·Ø§ÛŒÛŒ Ø§Ø² API Ø¨Ø±Ú¯Ø´Øª ÛŒØ§ result Ø®Ø§Ù„ÛŒ Ø¨ÙˆØ¯
+                error_msg = updates.get("description", "Unknown error") if updates else "No response"
+                logging.warning(f"No updates or API error: {error_msg}")
+                await asyncio.sleep(1)
+                
+        except Exception as e:
+            logging.error(f"Error in main loop: {e}")
+            await asyncio.sleep(5)
+
+if __name__ == "__main__":
+    asyncio.run(main())
+
+
+===== core\api_client.py =====
+
+# core/api_client.py
+import httpx
+import logging
+from config import API_BASE_URL
+
+logging.basicConfig(level=logging.INFO)
+
+_client = None
+
+async def get_client():
+    global _client
+    if _client is None or _client.is_closed:
+        _client = httpx.AsyncClient(timeout=60.0)
+    return _client
+
+async def api_call(method, payload=None):
+    client = await get_client()
+    url = f"{API_BASE_URL}{method}"
+    try:
+        response = await client.post(url, json=payload or {})
+        data = response.json()
+        if not data.get("ok"):
+            error_msg = data.get("description", "Unknown error")
+            logging.error(f"API Error {method}: {error_msg}")
+            return {"ok": False, "description": error_msg}
+        return data
+    except httpx.TimeoutException:
+        logging.error(f"Request timeout {method}")
+        return {"ok": False, "description": "â³ Ø²Ù…Ø§Ù† Ù¾Ø§Ø³Ø®Ú¯ÙˆÛŒÛŒ Ø³Ø±ÙˆØ± Ø¨Ù‡ Ù¾Ø§ÛŒØ§Ù† Ø±Ø³ÛŒØ¯"}
+    except Exception as e:
+        logging.error(f"Request failed {method}: {e}")
+        return {"ok": False, "description": "âŒ Ø§ØªØµØ§Ù„ Ø¨Ù‡ Ø³Ø±ÙˆØ± Ø¨Ø±Ù‚Ø±Ø§Ø± Ù†Ø´Ø¯"}
+
+async def send_message(chat_id, text, reply_markup=None, parse_mode="HTML", reply_to_message_id=None):
+    payload = {
+        "chat_id": chat_id, 
+        "text": text, 
+        "parse_mode": parse_mode
+    }
+    if reply_markup:
+        payload["reply_markup"] = reply_markup
+    if reply_to_message_id:
+        payload["reply_to_message_id"] = reply_to_message_id
+    return await api_call("sendMessage", payload)
+
+async def delete_message(chat_id, message_id):
+    return await api_call("deleteMessage", {"chat_id": chat_id, "message_id": message_id})
+
+async def answer_callback(callback_query_id, text=None, show_alert=False, cache_time=None):
+    payload = {"callback_query_id": callback_query_id}
+    if text is not None:
+        payload["text"] = text
+    if show_alert:
+        payload["show_alert"] = show_alert
+    if cache_time is not None:
+        payload["cache_time"] = cache_time
+    return await api_call("answerCallbackQuery", payload)
+
+async def send_typing_action(chat_id):
+    return await api_call("sendChatAction", {"chat_id": chat_id, "action": "typing"})
+
+async def edit_message_text(chat_id, message_id, text, reply_markup=None, parse_mode="HTML"):
+    payload = {
+        "chat_id": chat_id,
+        "message_id": message_id,
+        "text": text,
+        "parse_mode": parse_mode
+    }
+    if reply_markup:
+        payload["reply_markup"] = reply_markup
+    return await api_call("editMessageText", payload)
+
+async def get_chat_member(chat_id, user_id):
+    return await api_call("getChatMember", {"chat_id": chat_id, "user_id": user_id})
+
+async def join_chat(chat_id_or_link):
+    return await api_call("joinChat", {"chat_id": chat_id_or_link})
+
+async def get_chat_member_count(chat_id):
+    return await api_call("getChatMemberCount", {"chat_id": chat_id})
+
+async def kick_chat_member(chat_id, user_id):
+    return await api_call("kickChatMember", {"chat_id": chat_id, "user_id": user_id})
+
+
+===== core\database.py =====
+
+# core/database.py
+import logging
+import aiosqlite
+import sqlite3
+import asyncio
+from config import DB_PATH
+
+_db_conn = None
+
+async def init_db():
+    global _db_conn
+    _db_conn = await aiosqlite.connect(DB_PATH)
+    _db_conn.row_factory = aiosqlite.Row
+    
+    await _db_conn.executescript('''
+        CREATE TABLE IF NOT EXISTS groups (
+            chat_id INTEGER PRIMARY KEY, 
+            welcome TEXT, 
+            antilink BOOLEAN DEFAULT 1, 
+            rules TEXT,
+            is_premium BOOLEAN DEFAULT 0,
+            total_messages INTEGER DEFAULT 0,
+            antispam BOOLEAN DEFAULT 1,
+            filter_enabled BOOLEAN DEFAULT 1,
+            welcome_enabled BOOLEAN DEFAULT 1,
+            lock_links BOOLEAN DEFAULT 0,
+            lock_photos BOOLEAN DEFAULT 0,
+            lock_videos BOOLEAN DEFAULT 0,
+            lock_stickers BOOLEAN DEFAULT 0,
+            lock_forward BOOLEAN DEFAULT 0
+        );
+        
+        CREATE TABLE IF NOT EXISTS users (
+            user_id INTEGER, 
+            chat_id INTEGER, 
+            is_banned BOOLEAN DEFAULT 0,
+            muted_until TIMESTAMP DEFAULT 0,
+            PRIMARY KEY (user_id, chat_id)
+        );
+        
+        CREATE TABLE IF NOT EXISTS warnings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, 
+            chat_id INTEGER, 
+            user_id INTEGER, 
+            reason TEXT, 
+            date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        
+        CREATE TABLE IF NOT EXISTS filters (
+            chat_id INTEGER, 
+            word TEXT, 
+            PRIMARY KEY (chat_id, word)
+        );
+
+        CREATE TABLE IF NOT EXISTS user_stats (
+            user_id INTEGER, 
+            chat_id INTEGER, 
+            xp INTEGER DEFAULT 0, 
+            level INTEGER DEFAULT 1, 
+            last_xp_time TIMESTAMP,
+            coins INTEGER DEFAULT 0,
+            last_daily TIMESTAMP,
+            daily_streak INTEGER DEFAULT 0,
+            last_work TIMESTAMP DEFAULT 0,
+            last_rob TIMESTAMP DEFAULT 0,
+            PRIMARY KEY (user_id, chat_id)
+        );
+        
+        CREATE TABLE IF NOT EXISTS user_achievements (
+            user_id INTEGER, 
+            chat_id INTEGER, 
+            badge TEXT, 
+            PRIMARY KEY (user_id, chat_id, badge)
+        );
+        
+        CREATE TABLE IF NOT EXISTS moderation_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, 
+            chat_id INTEGER, 
+            admin_id INTEGER, 
+            action TEXT, 
+            target_id INTEGER, 
+            reason TEXT, 
+            date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        
+        CREATE TABLE IF NOT EXISTS user_inventory (
+            user_id INTEGER, 
+            chat_id INTEGER, 
+            item TEXT, 
+            PRIMARY KEY (user_id, chat_id, item)
+        );
+        
+        CREATE TABLE IF NOT EXISTS active_games (
+            game_id TEXT PRIMARY KEY,
+            chat_id INTEGER,
+            game_type TEXT,
+            data TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+    ''')
+    
+    await _db_conn.commit()
+    logging.info("Database initialized successfully")
+
+async def execute_query(query, params=(), fetch=False):
+    if not _db_conn: 
+        await init_db()
+    try:
+        cursor = await _db_conn.execute(query, params)
+        if fetch:
+            rows = await cursor.fetchall()
+            await cursor.close()
+            return rows
+        await cursor.close()
+        return cursor.rowcount
+    except Exception as e:
+        logging.error(f"DB Error on query [{query}]: {e}")
+        return [] if fetch else 0
+
+async def db_commit_task():
+    while True:
+        await asyncio.sleep(3)
+        try:
+            await _db_conn.commit()
+        except Exception as e:
+            logging.error(f"DB Commit Error: {e}")
+
+
+===== core\normalizer.py =====
+
+# core/normalizer.py
+import re
+
+def normalize_text(text: str) -> str:
+    """Ù†Ø±Ù…Ø§Ù„â€ŒØ³Ø§Ø²ÛŒ Ù…ØªÙ† Ø¨Ø±Ø§ÛŒ Ø¬Ù„ÙˆÚ¯ÛŒØ±ÛŒ Ø§Ø² Ø¯ÙˆØ± Ø²Ø¯Ù† ÙÛŒÙ„ØªØ±Ù‡Ø§"""
+    # ØªØ¨Ø¯ÛŒÙ„ Ø­Ø±ÙˆÙ Ø¹Ø±Ø¨ÛŒ Ø¨Ù‡ ÙØ§Ø±Ø³ÛŒ
+    arabic_to_persian = {
+        'ÙŠ': 'ÛŒ', 'Ùƒ': 'Ú©', 'Ø©': 'Ù‡', 'Ø¤': 'Ùˆ', 'Ø¦': 'ÛŒ',
+        'Ø¥': 'Ø§', 'Ø£': 'Ø§', 'Ø¢': 'Ø§', 'Ù‰': 'ÛŒ'
+    }
+    for arabic, persian in arabic_to_persian.items():
+        text = text.replace(arabic, persian)
+    
+    # ØªØ¨Ø¯ÛŒÙ„ Ø§Ø¹Ø¯Ø§Ø¯ Ø¹Ø±Ø¨ÛŒ Ø¨Ù‡ ÙØ§Ø±Ø³ÛŒ
+    arabic_numbers = {
+        'Ù ': 'Û°', 'Ù¡': 'Û±', 'Ù¢': 'Û²', 'Ù£': 'Û³', 'Ù¤': 'Û´',
+        'Ù¥': 'Ûµ', 'Ù¦': 'Û¶', 'Ù§': 'Û·', 'Ù¨': 'Û¸', 'Ù©': 'Û¹'
+    }
+    for arabic, persian in arabic_numbers.items():
+        text = text.replace(arabic, persian)
+    
+    # Ø­Ø°Ù Ù†ÛŒÙ…â€ŒÙØ§ØµÙ„Ù‡ Ùˆ ÙØ§ØµÙ„Ù‡â€ŒÙ‡Ø§ÛŒ Ù†Ø§Ù…Ø±Ø¦ÛŒ
+    text = text.replace('\u200c', '').replace('\u200d', '').replace('\u200b', '')
+    
+    # Ø­Ø°Ù Ú©Ø§Ø±Ø§Ú©ØªØ±Ù‡Ø§ÛŒ Ø®Ø§Øµ Ø¨Ø±Ø§ÛŒ Ø¯ÙˆØ± Ø²Ø¯Ù†
+    text = re.sub(r'[._-]', '', text)
+    
+    # ØªØ¨Ø¯ÛŒÙ„ Ø¨Ù‡ Ø­Ø±ÙˆÙ Ú©ÙˆÚ†Ú© Ø§Ù†Ú¯Ù„ÛŒØ³ÛŒ
+    return text.lower()
+
+
+===== core\router.py =====
+
+# core/router.py
+import re
+from core.api_client import send_message, join_chat, get_chat_member_count
+from services.permission_service import is_group_admin, is_super_admin
+
+from handlers.base import (
+    handle_start, handle_help, handle_profile, handle_leaderboard,
+    handle_games_menu, handle_fun_menu, handle_settings_menu, handle_economy_menu,
+    get_main_menu_keyboard
+)
+from handlers.admin import (
+    handle_admin_panel, handle_set_welcome, handle_set_rules, handle_rules, 
+    handle_set_premium, handle_group_stats, handle_premium_info, handle_install
+)
+from handlers.moderation import (
+    handle_warn, handle_ban, handle_filter, handle_set_antilink,
+    handle_mute, handle_unmute, handle_logs, handle_kick, handle_end_vote
+)
+from handlers.fun import handle_who, handle_vote, handle_truth, handle_dare
+from handlers.games import handle_trivia, handle_rps, handle_guess
+from handlers.ai import handle_ask, handle_suggest, handle_challenge, handle_direct_chat
+from handlers.economy import (
+    handle_balance, handle_daily, handle_coinflip, 
+    handle_work, handle_rob, handle_give, handle_shop, handle_buy
+)
+from config import MIN_GROUP_MEMBERS
+# core/router.py
+import re
+from core.api_client import send_message, join_chat, get_chat_member_count
+from services.permission_service import is_group_admin, is_super_admin
+from handlers.admin import (
+    handle_admin_panel, handle_set_welcome, handle_set_rules, handle_rules, 
+    handle_set_premium, handle_group_stats, handle_premium_info, handle_install, 
+    handle_bot_stats  # <--- Ø§ÛŒÙ† Ø±Ùˆ Ø§Ø¶Ø§ÙÙ‡ Ú©Ù†
+)
+async def route_message(message):
+    chat_id = message["chat"]["id"]
+    chat_type = message["chat"]["type"]  # private, group, supergroup
+    text = message.get("text", "")
+    user_id = message["from"]["id"]
+    first_name = message["from"].get("first_name", "Ú©Ø§Ø±Ø¨Ø±")
+    username = message["from"].get("username", "")
+    reply_to_message = message.get("reply_to_message")
+    
+    # Û±. Ù„ÛŒÙ†Ú© Ø¬ÙˆÛŒÙ† Ú¯Ø±ÙˆÙ‡ Ø¯Ø± Ù¾ÛŒÙˆÛŒ
+    if chat_type == "private":
+        link_pattern = re.compile(r'(https?://splus\.ir/\S+|splus\.ir/\S+|@[\w_]+)', re.IGNORECASE)
+        if link_pattern.search(text):
+            link = text.strip()
+            await send_message(chat_id, "â³ Ø¯Ø± Ø­Ø§Ù„ ØªÙ„Ø§Ø´ Ø¨Ø±Ø§ÛŒ ÙˆØ±ÙˆØ¯ Ø¨Ù‡ Ú¯Ø±ÙˆÙ‡...")
+            res = await join_chat(link)
+            
+            if res and res.get("ok"):
+                group_id = res["result"]["id"]
+                group_name = res["result"].get("title", "Ú¯Ø±ÙˆÙ‡")
+                count_res = await get_chat_member_count(group_id)
+                member_count = count_res["result"] if count_res and count_res.get("ok") else 0
+                
+                if member_count < MIN_GROUP_MEMBERS:
+                    await send_message(
+                        chat_id, 
+                        f"âš ï¸ Ú¯Ø±ÙˆÙ‡ Ø´Ù…Ø§ (<b>{group_name}</b>) ÙÙ‚Ø· {member_count} Ø¹Ø¶Ùˆ Ø¯Ø§Ø±Ø¯.\n"
+                        f"Ø­Ø¯Ø§Ù‚Ù„ ØªØ¹Ø¯Ø§Ø¯ Ø§Ø¹Ø¶Ø§ Ø¨Ø±Ø§ÛŒ ÙØ¹Ø§Ù„â€ŒØ³Ø§Ø²ÛŒ Ø±Ø¨Ø§Øª {MIN_GROUP_MEMBERS} Ù†ÙØ± Ø§Ø³Øª."
+                    )
+                else:
+                    await send_message(
+                        chat_id, 
+                        f"âœ… Ø±Ø¨Ø§Øª Ø¨Ø§ Ù…ÙˆÙÙ‚ÛŒØª ÙˆØ§Ø±Ø¯ Ú¯Ø±ÙˆÙ‡ <b>{group_name}</b> Ø´Ø¯!\n\n"
+                        f"ðŸŽ¯ Ù…Ø±Ø­Ù„Ù‡ Ø¨Ø¹Ø¯:\n"
+                        f"Û±. Ø±Ø¨Ø§Øª Ø±Ø§ Ø¯Ø± Ú¯Ø±ÙˆÙ‡ Ø§Ø¯Ù…ÛŒÙ† Ú©Ù†ÛŒØ¯.\n"
+                        f"Û². Ø¯Ø± Ú¯Ø±ÙˆÙ‡ Ø¯Ø³ØªÙˆØ± /install Ø±Ø§ Ø¨Ø²Ù†ÛŒØ¯."
+                    )
+                    await send_message(
+                        group_id, 
+                        f"ðŸ‘‹ Ø³Ù„Ø§Ù… Ø¨Ù‡ Ú¯Ø±ÙˆÙ‡ <b>{group_name}</b>!\n"
+                        f"Ù…Ù† RafiBot Ù‡Ø³ØªÙ… Ùˆ Ø§Ø¶Ø§ÙÙ‡ Ø´Ø¯Ù…. Ù„Ø·ÙØ§Ù‹ Ù…Ù† Ø±Ø§ Ø§Ø¯Ù…ÛŒÙ† Ú©Ù†ÛŒØ¯ Ùˆ Ø¯Ø³ØªÙˆØ± /install Ø±Ø§ Ø¨Ø²Ù†ÛŒØ¯."
+                    )
+            else:
+                await send_message(
+                    chat_id, 
+                    "âŒ Ù…ØªØ£Ø³ÙØ§Ù†Ù‡ Ù†ØªÙˆØ§Ù†Ø³ØªÙ… ÙˆØ§Ø±Ø¯ Ú¯Ø±ÙˆÙ‡ Ø´ÙˆÙ…. Ù„Ø·ÙØ§Ù‹ Ø¨Ø±Ø±Ø³ÛŒ Ú©Ù†ÛŒØ¯:\n"
+                    "â€¢ Ù„ÛŒÙ†Ú© Ø¯Ø¹ÙˆØª Ù…Ø¹ØªØ¨Ø± Ø¨Ø§Ø´Ø¯\n"
+                    "â€¢ Ø±Ø¨Ø§Øª Ù‚Ø¨Ù„Ø§Ù‹ Ø¹Ø¶Ùˆ Ù†Ø´Ø¯Ù‡ Ø¨Ø§Ø´Ø¯"
+                )
+            return
+
+    # Û². Ø³ÛŒØ³ØªÙ… Ù‡ÙˆØ´ Ù…ØµÙ†ÙˆØ¹ÛŒ Ø®ÙˆØ¯Ú©Ø§Ø± (ÙØ±Ø§Ù†Ø³)
+    is_reply_to_bot = reply_to_message and reply_to_message.get("from", {}).get("is_bot", False)
+    starts_with_france = text.lower().startswith("ÙØ±Ø§Ù†Ø³") or text.lower().startswith("france")
+    
+    if not text.startswith("/") and (is_reply_to_bot or starts_with_france):
+        if text.strip() in ["ÙØ±Ø§Ù†Ø³", "france"]:
+            await send_message(chat_id, "ðŸ‡«ðŸ‡· Ø¨Ù„Ù‡ØŸ Ø³ÙˆØ§Ù„ÛŒ Ø¯Ø§Ø±ÛŒØŸ")
+            return
+            
+        clean_text = text.replace("ÙØ±Ø§Ù†Ø³", "", 1).replace("france", "", 1).strip()
+        if not clean_text and is_reply_to_bot:
+            clean_text = text
+            
+        if clean_text:
+            await handle_direct_chat(chat_id, clean_text, user_id)
+            return
+
+    # Û³. Ø¯Ø³ØªÙˆØ±Ø§Øª Ø³Ø±ÛŒØ¹ Ù‡ÙˆØ´ Ù…ØµÙ†ÙˆØ¹ÛŒ
+    if text.startswith("/ask"):
+        await handle_ask(chat_id, text, user_id); return
+    if text.startswith("/suggest"):
+        await handle_suggest(chat_id, text, user_id); return
+    if text == "/challenge":
+        await handle_challenge(chat_id, user_id); return
+
+    # Û´. Ø¯Ú©Ù…Ù‡â€ŒÙ‡Ø§ÛŒ Ú¯Ø±ÙˆÙ‡ÛŒ (ReplyKeyboardMarkup)
+    if chat_type in ["group", "supergroup"]:
+        if text == "ðŸ§  Ø³ÙˆØ§Ù„ Ø¹Ù…ÙˆÙ…ÛŒ":
+            await handle_trivia(chat_id); return
+        elif text == "âœ‚ï¸ Ø³Ù†Ú¯ Ú©Ø§ØºØ° Ù‚ÛŒÚ†ÛŒ":
+            await handle_rps(chat_id); return
+        elif text == "ðŸŽ¯ Ø­Ø¯Ø³ Ø¹Ø¯Ø¯":
+            await handle_guess(chat_id); return
+        elif text == "ðŸŽ¯ Ø§Ù†ØªØ®Ø§Ø¨ ØªØµØ§Ø¯ÙÛŒ":
+            await handle_who(chat_id); return
+        elif text == "ðŸ¤” Ø­Ù‚ÛŒÙ‚Øª":
+            await handle_truth(chat_id); return
+        elif text == "ðŸ”¥ Ø¬Ø±Ø¦Øª":
+            await handle_dare(chat_id); return
+        elif text == "ðŸ’° Ù…ÙˆØ¬ÙˆØ¯ÛŒ":
+            await handle_balance(chat_id, user_id, first_name); return
+        elif text == "ðŸŽ Ø±ÙˆØ²Ø§Ù†Ù‡":
+            await handle_daily(chat_id, user_id, first_name); return
+        elif text == "ðŸ’¼ Ú©Ø§Ø±":
+            await handle_work(chat_id, user_id, first_name); return
+        elif text == "ðŸª™ Ø´ÛŒØ± ÛŒØ§ Ø®Ø·":
+            await send_message(chat_id, "âŒ Ø§Ø³ØªÙØ§Ø¯Ù‡: /coinflip [Ø´ÛŒØ±/Ø®Ø·] [Ù…Ø¨Ù„Øº]"); return
+        elif text == "ðŸª ÙØ±ÙˆØ´Ú¯Ø§Ù‡":
+            await handle_shop(chat_id); return
+        elif text == "ðŸ”™ Ø¨Ø§Ø²Ú¯Ø´Øª":
+            await send_message(chat_id, "ðŸ”™ Ø¨Ù‡ Ù…Ù†ÙˆÛŒ Ø§ØµÙ„ÛŒ Ø¨Ø±Ú¯Ø´ØªÛŒØ¯.", reply_markup=get_main_menu_keyboard())
+            return
+
+    # Ûµ. Ø¯Ú©Ù…Ù‡â€ŒÙ‡Ø§ÛŒ Ù…Ù†ÙˆÛŒ Ø§ØµÙ„ÛŒ (Ù‡Ù…Ù‡ Ú†Øªâ€ŒÙ‡Ø§)
+    if text == "â“ Ø±Ø§Ù‡Ù†Ù…Ø§" or text.startswith("/help"):
+        await handle_help(chat_id, chat_type); return
+    if text == "ðŸ† Ø±ØªØ¨Ù‡ Ù…Ù†" or text == "/profile":
+        await handle_profile(chat_id, user_id, first_name); return
+    if text == "ðŸŽ® Ø¨Ø§Ø²ÛŒâ€ŒÙ‡Ø§":
+        await handle_games_menu(chat_id, chat_type); return
+    if text == "ðŸ˜‚ Ø³Ø±Ú¯Ø±Ù…ÛŒ":
+        await handle_fun_menu(chat_id, chat_type); return
+    if text == "ðŸ›¡ Ù…Ø¯ÛŒØ±ÛŒØª":
+        await handle_admin_panel(chat_id, user_id); return
+    if text == "âš™ï¸ ØªÙ†Ø¸ÛŒÙ…Ø§Øª":
+        await handle_settings_menu(chat_id, chat_type); return
+    if text == "ðŸ’° Ø§Ù‚ØªØµØ§Ø¯":
+        await handle_economy_menu(chat_id, chat_type); return
+
+    # Û¶. Ø¯Ø³ØªÙˆØ±Ø§Øª Ø§Ø¯Ù…ÛŒÙ† Ú¯Ø±ÙˆÙ‡ (Ø¨Ø§ Ø±ÛŒÙ¾Ù„Ø§ÛŒ)
+    if text.startswith(("/warn", "/ban", "/mute", "/unmute", "/kick")):
+        if await is_group_admin(chat_id, user_id):
+            if text.startswith("/warn"): await handle_warn(chat_id, message)
+            elif text.startswith("/ban"): await handle_ban(chat_id, message)
+            elif text.startswith("/mute"): await handle_mute(chat_id, message, user_id)
+            elif text.startswith("/unmute"): await handle_unmute(chat_id, message, user_id)
+            elif text.startswith("/kick"): await handle_kick(chat_id, message, user_id)
+        else:
+            await send_message(chat_id, "â›” Ø§ÛŒÙ† Ø¯Ø³ØªÙˆØ± ÙÙ‚Ø· Ø¨Ø±Ø§ÛŒ Ø§Ø¯Ù…ÛŒÙ†â€ŒÙ‡Ø§ÛŒ Ú¯Ø±ÙˆÙ‡ Ø¯Ø± Ø¯Ø³ØªØ±Ø³ Ø§Ø³Øª.")
+        return
+
+    # Û·. Ø¯Ø³ØªÙˆØ±Ø§Øª Ø§Ø¯Ù…ÛŒÙ† Ú¯Ø±ÙˆÙ‡ (Ø¨Ø§ ØªÚ©Ø³Øª)
+    if text.startswith(("/filter", "/setantilink", "/setwelcome", "/setrules")):
+        if await is_group_admin(chat_id, user_id):
+            if text.startswith("/filter"): await handle_filter(chat_id, text, user_id)
+            elif text.startswith("/setantilink"): await handle_set_antilink(chat_id, text, user_id)
+            elif text.startswith("/setwelcome"): await handle_set_welcome(chat_id, text, user_id)
+            elif text.startswith("/setrules"): await handle_set_rules(chat_id, text, user_id)
+        else:
+            await send_message(chat_id, "â›” Ø§ÛŒÙ† Ø¯Ø³ØªÙˆØ± ÙÙ‚Ø· Ø¨Ø±Ø§ÛŒ Ø§Ø¯Ù…ÛŒÙ†â€ŒÙ‡Ø§ÛŒ Ú¯Ø±ÙˆÙ‡ Ø¯Ø± Ø¯Ø³ØªØ±Ø³ Ø§Ø³Øª.")
+        return
+
+    # Û¸. Ø³Ø§ÛŒØ± Ø¯Ø³ØªÙˆØ±Ø§Øª Ø§Ø¯Ù…ÛŒÙ†
+    if text == "/logs":
+        if await is_group_admin(chat_id, user_id):
+            await handle_logs(chat_id, user_id)
+        else:
+            await send_message(chat_id, "â›” Ø§ÛŒÙ† Ø¯Ø³ØªÙˆØ± ÙÙ‚Ø· Ø¨Ø±Ø§ÛŒ Ø§Ø¯Ù…ÛŒÙ†â€ŒÙ‡Ø§ÛŒ Ú¯Ø±ÙˆÙ‡ Ø¯Ø± Ø¯Ø³ØªØ±Ø³ Ø§Ø³Øª.")
+        return
+        
+    if text == "/endvote":
+        if await is_group_admin(chat_id, user_id):
+            await handle_end_vote(chat_id, user_id)
+        else:
+            await send_message(chat_id, "â›” Ø§ÛŒÙ† Ø¯Ø³ØªÙˆØ± ÙÙ‚Ø· Ø¨Ø±Ø§ÛŒ Ø§Ø¯Ù…ÛŒÙ†â€ŒÙ‡Ø§ÛŒ Ú¯Ø±ÙˆÙ‡ Ø¯Ø± Ø¯Ø³ØªØ±Ø³ Ø§Ø³Øª.")
+        return
+
+    if text == "/install":
+        if await is_group_admin(chat_id, user_id):
+            await handle_install(chat_id, user_id)
+        else:
+            await send_message(chat_id, "â›” ÙÙ‚Ø· Ø§Ø¯Ù…ÛŒÙ† Ú¯Ø±ÙˆÙ‡ Ù…ÛŒâ€ŒØªÙˆØ§Ù†Ø¯ Ø±Ø¨Ø§Øª Ø±Ø§ Ù†ØµØ¨ Ú©Ù†Ø¯.")
+        return
+
+    # Û¹. Ø¯Ø³ØªÙˆØ±Ø§Øª Ù…Ø§Ù„Ú© Ø±Ø¨Ø§Øª (Ø³ÙˆÙ¾Ø± Ø§Ø¯Ù…ÛŒÙ†)
+    if text.startswith("/setpremium"):
+        if is_super_admin(user_id, username):  # <-- username Ø§Ø¶Ø§ÙÙ‡ Ø´Ø¯
+            await handle_set_premium(chat_id, text, user_id, username)
+        else:
+            await send_message(chat_id, "â›” Ø§ÛŒÙ† Ø¯Ø³ØªÙˆØ± ÙÙ‚Ø· Ø¨Ø±Ø§ÛŒ Ù…Ø§Ù„Ú© Ø±Ø¨Ø§Øª Ø¯Ø± Ø¯Ø³ØªØ±Ø³ Ø§Ø³Øª.")
+        return
+
+    # Û±Û°. Ø¯Ø³ØªÙˆØ±Ø§Øª Ù†ÛŒØ§Ø²Ù…Ù†Ø¯ Ø±ÛŒÙ¾Ù„Ø§ÛŒ
+    if text.startswith("/rob"):
+        await handle_rob(chat_id, message, user_id, first_name); return
+    if text.startswith("/give"):
+        await handle_give(chat_id, message, text, user_id, first_name); return
+
+    # Û±Û±. Ø¯Ø³ØªÙˆØ±Ø§Øª Ø¹Ø§Ø¯ÛŒ Ú©Ø§Ø±Ø¨Ø±Ø§Ù†
+    if text.startswith("/start"):
+        await handle_start(chat_id, chat_type); return
+    if text == "/top":
+        await handle_leaderboard(chat_id); return
+    if text == "/rules":
+        await handle_rules(chat_id); return
+    if text == "/who":
+        await handle_who(chat_id); return
+    if text.startswith("/vote"):
+        await handle_vote(chat_id, text, user_id, first_name); return
+    if text == "/truth":
+        await handle_truth(chat_id); return
+    if text == "/dare":
+        await handle_dare(chat_id); return
+    if text == "/trivia":
+        await handle_trivia(chat_id); return
+    if text == "/groupstats":
+        await handle_group_stats(chat_id, user_id); return
+    if text == "/premium":
+        await handle_premium_info(chat_id); return
+        
+    # Û±Û². Ø¯Ø³ØªÙˆØ±Ø§Øª Ø§Ù‚ØªØµØ§Ø¯
+    if text == "/balance":
+        await handle_balance(chat_id, user_id, first_name); return
+    if text == "/daily":
+        await handle_daily(chat_id, user_id, first_name); return
+    if text.startswith("/coinflip"):
+        await handle_coinflip(chat_id, text, user_id, first_name); return
+    if text == "/work":
+        await handle_work(chat_id, user_id, first_name); return
+    if text == "/shop":
+        await handle_shop(chat_id); return
+    if text.startswith("/buy"):
+        await handle_buy(chat_id, text, user_id, first_name); return
+        
+    # --- Ø¯Ø³ØªÙˆØ± Ù…Ø´Ø§Ù‡Ø¯Ù‡ Ø¢Ù…Ø§Ø± Ø±Ø¨Ø§Øª ---
+    if text == "/botstats":
+        if is_super_admin(user_id, username):  # <-- username Ø§Ø¶Ø§ÙÙ‡ Ø´Ø¯
+            await handle_bot_stats(chat_id, user_id)
+        else:
+            await send_message(chat_id, "â›” Ø§ÛŒÙ† Ø¯Ø³ØªÙˆØ± ÙÙ‚Ø· Ø¨Ø±Ø§ÛŒ Ù…Ø§Ù„Ú© Ø±Ø¨Ø§Øª Ø¯Ø± Ø¯Ø³ØªØ±Ø³ Ø§Ø³Øª.")
+        return
+
+
+===== handlers\admin.py =====
+
+# handlers/admin.py
+from core.api_client import send_message, edit_message_text
+from core.database import execute_query
+from services.group_service import (
+    set_welcome, get_welcome, set_rules, get_rules, 
+    is_group_premium, set_group_premium, get_group_settings
+)
+from services.permission_service import is_group_admin, is_super_admin
+
+NO_PERMISSION_TEXT = "â›” Ø§ÛŒÙ† Ø¯Ø³ØªÙˆØ± ÙÙ‚Ø· Ø¨Ø±Ø§ÛŒ Ø§Ø¯Ù…ÛŒÙ†â€ŒÙ‡Ø§ÛŒ Ú¯Ø±ÙˆÙ‡ Ø¯Ø± Ø¯Ø³ØªØ±Ø³ Ø§Ø³Øª."
+NO_SUPER_PERMISSION_TEXT = "â›” Ø§ÛŒÙ† Ø¯Ø³ØªÙˆØ± ÙÙ‚Ø· Ø¨Ø±Ø§ÛŒ Ù…Ø§Ù„Ú© Ø±Ø¨Ø§Øª Ø¯Ø± Ø¯Ø³ØªØ±Ø³ Ø§Ø³Øª."
+
+# Ø¯Ø± handlers/admin.py ØªØ§Ø¨Ø¹ get_admin_panel_keyboard Ø±Ø§ Ø§ØµÙ„Ø§Ø­ Ú©Ù†ÛŒØ¯:
+
+def get_admin_panel_keyboard(settings):
+    def status_btn(key, label):
+        val = settings.get(key, 0)
+        status = "ðŸŸ¢" if val else "ðŸ”´"
+        return {"text": f"{label} {status}", "callback_data": f"toggle_{key}"}
+
+    return {
+        "inline_keyboard": [
+            [status_btn("antilink", "Ø¢Ù†ØªÛŒâ€ŒÙ„ÛŒÙ†Ú©"), status_btn("antispam", "Ø¶Ø¯ Ø§Ø³Ù¾Ù…")],
+            [status_btn("filter_enabled", "ÙÛŒÙ„ØªØ± Ú©Ù„Ù…Ø§Øª"), status_btn("welcome_enabled", "Ø®ÙˆØ´â€ŒØ¢Ù…Ø¯Ú¯ÙˆÛŒÛŒ")],
+            [status_btn("lock_links", "ðŸ”— Ù‚ÙÙ„ Ù„ÛŒÙ†Ú©"), status_btn("lock_photos", "ðŸ–¼ Ù‚ÙÙ„ Ø¹Ú©Ø³")],
+            [status_btn("lock_videos", "ðŸŽ¬ Ù‚ÙÙ„ ÙˆÛŒØ¯ÛŒÙˆ"), status_btn("lock_stickers", "ðŸ· Ù‚ÙÙ„ Ø§Ø³ØªÛŒÚ©Ø±")],
+            [status_btn("lock_forward", "ðŸ“¤ Ù‚ÙÙ„ ÙÙˆØ±ÙˆØ§Ø±Ø¯")],
+            [{"text": "ðŸ”™ Ø¨Ø§Ø²Ú¯Ø´Øª Ø¨Ù‡ Ù…Ù†ÙˆÛŒ Ø§ØµÙ„ÛŒ", "callback_data": "main_menu"}]
+        ]
+    }
+
+async def handle_admin_panel(chat_id, user_id):
+    """Ù†Ù…Ø§ÛŒØ´ Ù¾Ù†Ù„ Ù…Ø¯ÛŒØ±ÛŒØª - ÙÙ‚Ø· Ø¨Ø±Ø§ÛŒ Ø§Ø¯Ù…ÛŒÙ†â€ŒÙ‡Ø§"""
+    if not await is_group_admin(chat_id, user_id):
+        await send_message(chat_id, NO_PERMISSION_TEXT)
+        return
+        
+    settings = await get_group_settings(chat_id)
+    text = (
+        "ðŸ›¡ <b>Ù¾Ù†Ù„ Ù…Ø¯ÛŒØ±ÛŒØª Ú¯Ø±ÙˆÙ‡</b>\n\n"
+        "Ø¨Ø§ Ú©Ù„ÛŒÚ© Ø±ÙˆÛŒ Ù‡Ø± Ø¯Ú©Ù…Ù‡ØŒ Ø¢Ù† Ù‚Ø§Ø¨Ù„ÛŒØª Ø±Ø§ Ø±ÙˆØ´Ù† ÛŒØ§ Ø®Ø§Ù…ÙˆØ´ Ú©Ù†:\n\n"
+        "ðŸŸ¢ = ÙØ¹Ø§Ù„ | ðŸ”´ = ØºÛŒØ±ÙØ¹Ø§Ù„"
+    )
+    await send_message(chat_id, text, reply_markup=get_admin_panel_keyboard(settings))
+
+async def handle_set_welcome(chat_id, text, user_id):
+    if not await is_group_admin(chat_id, user_id):
+        await send_message(chat_id, NO_PERMISSION_TEXT)
+        return
+
+    parts = text.split(" ", 1)
+    if len(parts) < 2:
+        await send_message(chat_id, "âŒ Ø§Ø³ØªÙØ§Ø¯Ù‡: /setwelcome [Ù…ØªÙ† Ø®ÙˆØ´â€ŒØ¢Ù…Ø¯Ú¯ÙˆÛŒÛŒ]")
+        return
+        
+    welcome_text = parts[1].strip()
+    if len(welcome_text) > 500:
+        await send_message(chat_id, "âš ï¸ Ù…ØªÙ† Ø®ÙˆØ´â€ŒØ¢Ù…Ø¯Ú¯ÙˆÛŒÛŒ Ù†Ø¨Ø§ÛŒØ¯ Ø¨ÛŒØ´ØªØ± Ø§Ø² ÛµÛ°Û° Ú©Ø§Ø±Ø§Ú©ØªØ± Ø¨Ø§Ø´Ø¯.")
+        return
+        
+    await set_welcome(chat_id, welcome_text)
+    await send_message(chat_id, "âœ… Ù¾ÛŒØ§Ù… Ø®ÙˆØ´â€ŒØ¢Ù…Ø¯Ú¯ÙˆÛŒÛŒ Ø¨Ø§ Ù…ÙˆÙÙ‚ÛŒØª Ø°Ø®ÛŒØ±Ù‡ Ø´Ø¯.\n\nðŸ’¡ Ø¨Ø±Ø§ÛŒ Ø´Ø®ØµÛŒâ€ŒØ³Ø§Ø²ÛŒ Ù…ÛŒâ€ŒØªÙˆØ§Ù†ÛŒ Ø§Ø² Ù…ØªØºÛŒØ±Ù‡Ø§ÛŒ Ø²ÛŒØ± Ø§Ø³ØªÙØ§Ø¯Ù‡ Ú©Ù†ÛŒ:\n{name} - Ù†Ø§Ù… Ú©Ø§Ø±Ø¨Ø±\n{username} - Ù†Ø§Ù… Ú©Ø§Ø±Ø¨Ø±ÛŒ\n{member_count} - ØªØ¹Ø¯Ø§Ø¯ Ø§Ø¹Ø¶Ø§")
+
+async def handle_set_rules(chat_id, text, user_id):
+    if not await is_group_admin(chat_id, user_id):
+        await send_message(chat_id, NO_PERMISSION_TEXT)
+        return
+
+    parts = text.split(" ", 1)
+    if len(parts) < 2:
+        await send_message(chat_id, "âŒ Ø§Ø³ØªÙØ§Ø¯Ù‡: /setrules [Ù…ØªÙ† Ù‚ÙˆØ§Ù†ÛŒÙ†]")
+        return
+        
+    rules_text = parts[1].strip()
+    if len(rules_text) > 2000:
+        await send_message(chat_id, "âš ï¸ Ù…ØªÙ† Ù‚ÙˆØ§Ù†ÛŒÙ† Ù†Ø¨Ø§ÛŒØ¯ Ø¨ÛŒØ´ØªØ± Ø§Ø² Û²Û°Û°Û° Ú©Ø§Ø±Ø§Ú©ØªØ± Ø¨Ø§Ø´Ø¯.")
+        return
+        
+    await set_rules(chat_id, rules_text)
+    await send_message(chat_id, "âœ… Ù‚ÙˆØ§Ù†ÛŒÙ† Ú¯Ø±ÙˆÙ‡ Ø¨Ø§ Ù…ÙˆÙÙ‚ÛŒØª Ø°Ø®ÛŒØ±Ù‡ Ø´Ø¯.")
+
+async def handle_rules(chat_id):
+    rules = await get_rules(chat_id)
+    if rules:
+        text = f"ðŸ“œ <b>Ù‚ÙˆØ§Ù†ÛŒÙ† Ú¯Ø±ÙˆÙ‡</b>\n\n{rules}"
+    else:
+        text = "âš ï¸ Ù‡Ù†ÙˆØ² Ù‚ÙˆØ§Ù†ÛŒÙ†ÛŒ Ø¨Ø±Ø§ÛŒ Ø§ÛŒÙ† Ú¯Ø±ÙˆÙ‡ ØªÙ†Ø¸ÛŒÙ… Ù†Ø´Ø¯Ù‡ Ø§Ø³Øª.\n\nðŸ’¡ Ø§Ø¯Ù…ÛŒÙ†â€ŒÙ‡Ø§ Ù…ÛŒâ€ŒØªÙˆØ§Ù†Ù†Ø¯ Ø¨Ø§ Ø¯Ø³ØªÙˆØ± /setrules Ù‚ÙˆØ§Ù†ÛŒÙ† Ø±Ø§ ØªÙ†Ø¸ÛŒÙ… Ú©Ù†Ù†Ø¯."
+    await send_message(chat_id, text)
+
+async def handle_new_member(chat_id, new_member):
+    welcome = await get_welcome(chat_id)
+    if welcome:
+        member_name = new_member.get("first_name", "Ú©Ø§Ø±Ø¨Ø±")
+        username = f"@{new_member.get('username')}" if new_member.get('username') else "Ù†Ø¯Ø§Ø±Ø¯"
+        user_id = new_member.get("id", "")
+        
+        from core.api_client import get_chat_member_count
+        count_res = await get_chat_member_count(chat_id)
+        member_count = count_res["result"] if count_res and count_res.get("ok") else "Ù†Ø§Ù…Ø´Ø®Øµ"
+        
+        final_text = welcome.replace("{name}", member_name).replace("{username}", username).replace("{user_id}", str(user_id)).replace("{member_count}", str(member_count))
+        text = f"ðŸ‘‹ {final_text}"
+        await send_message(chat_id, text)
+
+async def handle_left_member(chat_id, left_member):
+    left_name = left_member.get("first_name", "Ú©Ø§Ø±Ø¨Ø±")
+    text = f"ðŸ‘‹ Ø®Ø¯Ø§Ø­Ø§ÙØ¸ <b>{left_name}</b>! Ø§Ù…ÛŒØ¯ÙˆØ§Ø±ÛŒÙ… Ø¯ÙˆØ¨Ø§Ø±Ù‡ Ø¨Ø±Ú¯Ø±Ø¯ÛŒ."
+    await send_message(chat_id, text)
+
+async def handle_set_premium(chat_id, text, user_id, username=None):
+    if not is_super_admin(user_id, username):
+        await send_message(chat_id, NO_SUPER_PERMISSION_TEXT)
+        return
+
+    parts = text.split(" ", 1)
+
+    if len(parts) < 2 or parts[1].strip().lower() not in ["on", "off"]:
+        await send_message(chat_id, "âŒ Ø§Ø³ØªÙØ§Ø¯Ù‡: /setpremium [on/off]")
+        return
+
+    status = parts[1].strip().lower() == "on"
+
+    await set_group_premium(chat_id, status)
+
+    if status:
+        await send_message(
+            chat_id,
+            "ðŸ’Ž Ø§ÛŒÙ† Ú¯Ø±ÙˆÙ‡ Ø§Ù„Ø¢Ù† Premium Ø´Ø¯! ØªÙ…Ø§Ù… Ù…Ø­Ø¯ÙˆØ¯ÛŒØªâ€ŒÙ‡Ø§ Ø¨Ø±Ø¯Ø§Ø´ØªÙ‡ Ø´Ø¯."
+        )
+    else:
+        await send_message(
+            chat_id,
+            "â¬‡ï¸ Ø§ÛŒÙ† Ú¯Ø±ÙˆÙ‡ Ø¨Ù‡ Ù†Ø³Ø®Ù‡ Ø±Ø§ÛŒÚ¯Ø§Ù† Ø¨Ø±Ú¯Ø´Øª."
+        )
+        
+async def handle_group_stats(chat_id, user_id):
+    if not await is_group_admin(chat_id, user_id):
+        await send_message(chat_id, NO_PERMISSION_TEXT)
+        return
+        
+    is_premium = await is_group_premium(chat_id)
+    if not is_premium:
+        text = (
+            "ðŸ“Š <b>Ø¢Ù…Ø§Ø± Ú¯Ø±ÙˆÙ‡</b>\n\n"
+            "ðŸ”’ Ø§ÛŒÙ† Ù‚Ø§Ø¨Ù„ÛŒØª ÙÙ‚Ø· Ø¨Ø±Ø§ÛŒ Ú¯Ø±ÙˆÙ‡â€ŒÙ‡Ø§ÛŒ <b>Premium</b> Ø¯Ø± Ø¯Ø³ØªØ±Ø³ Ø§Ø³Øª.\n\n"
+            "Ø¨Ø±Ø§ÛŒ Ø§Ø±ØªÙ‚Ø§ Ú¯Ø±ÙˆÙ‡ØŒ Ø¨Ø§ Ù¾Ø´ØªÛŒØ¨Ø§Ù†ÛŒ Ø¯Ø± Ø§Ø±ØªØ¨Ø§Ø· Ø¨Ø§Ø´ÛŒØ¯: @Iambrrr"
+        )
+        await send_message(chat_id, text)
+        return
+
+    from services.group_service import get_message_count
+
+    total_users = len(await execute_query("SELECT user_id FROM user_stats WHERE chat_id=?", (chat_id,), fetch=True))
+    total_messages = await get_message_count(chat_id)
+
+    text = (
+        "ðŸ“Š <b>Ø¢Ù…Ø§Ø± Ø¯Ù‚ÛŒÙ‚ Ú¯Ø±ÙˆÙ‡ (Premium)</b>\n\n"
+        f"ðŸ‘¥ ØªØ¹Ø¯Ø§Ø¯ Ú©Ø§Ø±Ø¨Ø±Ø§Ù† ÙØ¹Ø§Ù„: <b>{total_users}</b>\n"
+        f"ðŸ’¬ Ù…Ø¬Ù…ÙˆØ¹ Ù¾ÛŒØ§Ù…â€ŒÙ‡Ø§ÛŒ Ø«Ø¨Øª Ø´Ø¯Ù‡: <b>{total_messages}</b>\n"
+        "âœ… ÙˆØ¶Ø¹ÛŒØª: Ú¯Ø±ÙˆÙ‡ Premium"
+    )
+    await send_message(chat_id, text)
+
+async def handle_premium_info(chat_id):
+    is_premium = await is_group_premium(chat_id)
+    status = "ðŸ’Ž Premium" if is_premium else "ðŸ†“ Ø±Ø§ÛŒÚ¯Ø§Ù† (Free)"
+    text = (
+        f"ðŸ’³ <b>ÙˆØ¶Ø¹ÛŒØª Ø§Ø´ØªØ±Ø§Ú© Ú¯Ø±ÙˆÙ‡</b>\n\n"
+        f"ÙˆØ¶Ø¹ÛŒØª ÙØ¹Ù„ÛŒ: <b>{status}</b>\n\n"
+        "<b>ØªÙØ§ÙˆØªâ€ŒÙ‡Ø§ÛŒ Ù†Ø³Ø®Ù‡ Premium:</b>\n"
+        "ðŸ”¹ ÙÛŒÙ„ØªØ± Ú©Ù„Ù…Ø§Øª Ù†Ø§Ù…Ø­Ø¯ÙˆØ¯ (Ø±Ø§ÛŒÚ¯Ø§Ù† ÙÙ‚Ø· Û³ Ú©Ù„Ù…Ù‡)\n"
+        "ðŸ”¹ Ø¯Ø³ØªØ±Ø³ÛŒ Ø¨Ù‡ Ø¢Ù…Ø§Ø± Ø¯Ù‚ÛŒÙ‚ Ú¯Ø±ÙˆÙ‡\n"
+        "ðŸ”¹ Ø¨Ø§Ø²ÛŒâ€ŒÙ‡Ø§ÛŒ Ø§Ø®ØªØµØ§ØµÛŒ Ø¨ÛŒØ´ØªØ±\n"
+        "ðŸ”¹ Ù‡ÙˆØ´ Ù…ØµÙ†ÙˆØ¹ÛŒ Ù¾ÛŒØ´Ø±ÙØªÙ‡\n\n"
+        "Ø¨Ø±Ø§ÛŒ Ø®Ø±ÛŒØ¯ Ø¨Ø§ Ù¾Ø´ØªÛŒØ¨Ø§Ù†ÛŒ Ø¯Ø± Ø§Ø±ØªØ¨Ø§Ø· Ø¨Ø§Ø´ÛŒØ¯: @Iambrrr"
+    )
+    await send_message(chat_id, text)
+
+async def handle_install(chat_id, user_id):
+    if not await is_group_admin(chat_id, user_id):
+        await send_message(chat_id, "â›” ÙÙ‚Ø· Ø§Ø¯Ù…ÛŒÙ† Ú¯Ø±ÙˆÙ‡ Ù…ÛŒâ€ŒØªÙˆØ§Ù†Ø¯ Ø±Ø¨Ø§Øª Ø±Ø§ Ù†ØµØ¨ Ú©Ù†Ø¯.")
+        return
+        
+    text = (
+        "âœ… <b>Ø±Ø¨Ø§Øª Ø¨Ø§ Ù…ÙˆÙÙ‚ÛŒØª Ù†ØµØ¨ Ø´Ø¯!</b>\n\n"
+        "ðŸŽ‰ RafiBot Ø¢Ù…Ø§Ø¯Ù‡ Ú©Ø§Ø± Ø§Ø³Øª.\n\n"
+        "ðŸ’¡ Ø¨Ø±Ø§ÛŒ ØªÙ†Ø¸ÛŒÙ…Ø§ØªØŒ Ø±ÙˆÛŒ Ø¯Ú©Ù…Ù‡ ðŸ›¡ Ù…Ø¯ÛŒØ±ÛŒØª Ø¯Ø± Ù…Ù†ÙˆÛŒ Ù¾Ø§ÛŒÛŒÙ† Ú©Ù„ÛŒÚ© Ú©Ù†ÛŒØ¯.\n"
+        "Ø¨Ø±Ø§ÛŒ Ø¯ÛŒØ¯Ù† Ø¯Ø³ØªÙˆØ±Ø§ØªØŒ /help Ø±Ø§ Ø¨Ø²Ù†ÛŒØ¯."
+    )
+    await send_message(chat_id, text)
+
+async def handle_bot_stats(chat_id, user_id):
+    if not is_super_admin(user_id):
+        return
+        
+    from services.group_service import get_bot_global_stats
+    total_groups, total_users = await get_bot_global_stats()
+    
+    text = (
+        "ðŸ“Š <b>Ø¢Ù…Ø§Ø± Ú©Ù„ÛŒ Ø±Ø¨Ø§Øª Ø´Ù…Ø§</b>\n\n"
+        f"ðŸ‘¥ ØªØ¹Ø¯Ø§Ø¯ Ú©Ù„ Ú¯Ø±ÙˆÙ‡â€ŒÙ‡Ø§ÛŒ Ù…ØªØµÙ„: <b>{total_groups}</b>\n"
+        f"ðŸ‘¤ ØªØ¹Ø¯Ø§Ø¯ Ú©Ù„ Ú©Ø§Ø±Ø¨Ø±Ø§Ù† Ø«Ø¨Øª Ø´Ø¯Ù‡: <b>{total_users}</b>\n"
+    )
+    await send_message(chat_id, text)
+
+
+===== handlers\ai.py =====
+
+# handlers/ai.py
+import time
+import asyncio
+from core.api_client import send_message, send_typing_action, edit_message_text
+from services.ai_service import ask_ai
+from config import AI_RATE_LIMIT, MAX_AI_PROMPT_LENGTH
+
+# Ø¯ÛŒØªØ§Ø¨ÛŒØ³ Ù…ÙˆÙ‚Øª Ø¨Ø±Ø§ÛŒ Ù…Ø­Ø¯ÙˆØ¯ÛŒØª Ù†Ø±Ø® Ø¯Ø±Ø®ÙˆØ§Ø³Øª Ù‡Ø± Ú©Ø§Ø±Ø¨Ø±
+_ai_requests = {}
+
+async def check_rate_limit(user_id):
+    """Ø¨Ø±Ø±Ø³ÛŒ Ù…Ø­Ø¯ÙˆØ¯ÛŒØª Ù†Ø±Ø® Ø¯Ø±Ø®ÙˆØ§Ø³Øª Ø¨Ø±Ø§ÛŒ Ú©Ø§Ø±Ø¨Ø±"""
+    now = time.time()
+    if user_id not in _ai_requests:
+        _ai_requests[user_id] = []
+    
+    _ai_requests[user_id] = [t for t in _ai_requests[user_id] if now - t < 60]
+    
+    if len(_ai_requests[user_id]) >= AI_RATE_LIMIT:
+        return False
+    
+    _ai_requests[user_id].append(now)
+    return True
+
+async def handle_ask(chat_id, text, user_id):
+    if not await check_rate_limit(user_id):
+        await send_message(
+            chat_id, 
+            f"â³ Ú©Ù…ÛŒ ØµØ¨Ø± Ú©Ù† Ùˆ Ø¯ÙˆØ¨Ø§Ø±Ù‡ Ø§Ù…ØªØ­Ø§Ù† Ú©Ù†.\n"
+            f"Ø­Ø¯Ø§Ú©Ø«Ø± {AI_RATE_LIMIT} Ø³ÙˆØ§Ù„ Ø¯Ø± Ø¯Ù‚ÛŒÙ‚Ù‡ Ù…ÛŒâ€ŒØªÙˆØ§Ù†ÛŒ Ø¨Ù¾Ø±Ø³ÛŒ."
+        )
+        return
+        
+    parts = text.split(" ", 1)
+    if len(parts) < 2:
+        await send_message(
+            chat_id, 
+            "âŒ Ø§Ø³ØªÙØ§Ø¯Ù‡: /ask [Ø³ÙˆØ§Ù„ Ø´Ù…Ø§]\n"
+            "Ù…Ø«Ø§Ù„: /ask Ù¾Ø§ÛŒØªØ®Øª Ú˜Ø§Ù¾Ù† Ú©Ø¬Ø§Ø³ØªØŸ"
+        )
+        return
+        
+    question = parts[1].strip()
+    if len(question) > MAX_AI_PROMPT_LENGTH:
+        await send_message(
+            chat_id,
+            f"âš ï¸ Ø³ÙˆØ§Ù„ Ø´Ù…Ø§ Ø®ÛŒÙ„ÛŒ Ø·ÙˆÙ„Ø§Ù†ÛŒ Ø§Ø³Øª.\nØ­Ø¯Ø§Ú©Ø«Ø± {MAX_AI_PROMPT_LENGTH} Ú©Ø§Ø±Ø§Ú©ØªØ± Ù…Ø¬Ø§Ø² Ø§Ø³Øª."
+        )
+        return
+    
+    await send_typing_action(chat_id)
+    
+    # Ø§Ø±Ø³Ø§Ù„ Ù¾ÛŒØ§Ù… "Ø¯Ø± ØµÙ Ù‡Ø³ØªÛŒØ¯"
+    wait_msg = await send_message(chat_id, "â³ Ø¯Ø±Ø®ÙˆØ§Ø³Øª Ø´Ù…Ø§ Ø¯Ø± ØµÙ Ù¾Ø±Ø¯Ø§Ø²Ø´ Ù‡ÙˆØ´ Ù…ØµÙ†ÙˆØ¹ÛŒ Ù‚Ø±Ø§Ø± Ú¯Ø±ÙØª...")
+    wait_msg_id = wait_msg.get("result", {}).get("message_id") if wait_msg and wait_msg.get("ok") else None
+    
+    answer = await ask_ai(question)
+    
+    # ÙˆÛŒØ±Ø§ÛŒØ´ Ù¾ÛŒØ§Ù… "Ø¯Ø± ØµÙ" Ùˆ Ù‚Ø±Ø§Ø± Ø¯Ø§Ø¯Ù† Ø¬ÙˆØ§Ø¨ Ù†Ù‡Ø§ÛŒÛŒ
+    if wait_msg_id:
+        await edit_message_text(chat_id, wait_msg_id, f"ðŸ‡«ðŸ‡· <b>ÙØ±Ø§Ù†Ø³:</b>\n\n{answer}")
+    else:
+        await send_message(chat_id, f"ðŸ‡«ðŸ‡· <b>ÙØ±Ø§Ù†Ø³:</b>\n\n{answer}")
+
+async def handle_suggest(chat_id, text, user_id):
+    if not await check_rate_limit(user_id):
+        await send_message(
+            chat_id, 
+            f"â³ Ú©Ù…ÛŒ ØµØ¨Ø± Ú©Ù† Ùˆ Ø¯ÙˆØ¨Ø§Ø±Ù‡ Ø§Ù…ØªØ­Ø§Ù† Ú©Ù†.\n"
+            f"Ø­Ø¯Ø§Ú©Ø«Ø± {AI_RATE_LIMIT} Ø¯Ø±Ø®ÙˆØ§Ø³Øª Ø¯Ø± Ø¯Ù‚ÛŒÙ‚Ù‡ Ù…ÛŒâ€ŒØªÙˆØ§Ù†ÛŒ Ø¨ÙØ±Ø³ØªÛŒ."
+        )
+        return
+        
+    parts = text.split(" ", 1)
+    if len(parts) < 2:
+        await send_message(
+            chat_id, 
+            "âŒ Ø§Ø³ØªÙØ§Ø¯Ù‡: /suggest [Ù…ÙˆØ¶ÙˆØ¹]\n"
+            "Ù…Ø«Ø§Ù„: /suggest Ø§Ø³Ù… ØªÛŒÙ… Ú¯ÛŒÙ…ÛŒÙ†Ú¯"
+        )
+        return
+        
+    topic = parts[1].strip()
+    if len(topic) > MAX_AI_PROMPT_LENGTH:
+        await send_message(
+            chat_id,
+            f"âš ï¸ Ù…ÙˆØ¶ÙˆØ¹ Ø´Ù…Ø§ Ø®ÛŒÙ„ÛŒ Ø·ÙˆÙ„Ø§Ù†ÛŒ Ø§Ø³Øª.\nØ­Ø¯Ø§Ú©Ø«Ø± {MAX_AI_PROMPT_LENGTH} Ú©Ø§Ø±Ø§Ú©ØªØ± Ù…Ø¬Ø§Ø² Ø§Ø³Øª."
+        )
+        return
+    
+    await send_typing_action(chat_id)
+    wait_msg = await send_message(chat_id, "â³ Ø¯Ø± Ø­Ø§Ù„ ØªÙˆÙ„ÛŒØ¯ Ø§ÛŒØ¯Ù‡â€ŒÙ‡Ø§ ØªÙˆØ³Ø· ÙØ±Ø§Ù†Ø³...")
+    wait_msg_id = wait_msg.get("result", {}).get("message_id") if wait_msg and wait_msg.get("ok") else None
+    
+    prompt = f"Û³ ØªØ§ Ø§ÛŒØ¯Ù‡ Ø®ÙÙ† Ùˆ Ø¬Ø°Ø§Ø¨ Ø¨Ø±Ø§ÛŒ Ø§ÛŒÙ† Ù…ÙˆØ¶ÙˆØ¹ Ø¨Ù‡ ÙØ§Ø±Ø³ÛŒ Ø¨Ø¯Ù‡. ÙÙ‚Ø· Ø§Ø³Ù…â€ŒÙ‡Ø§ Ø±Ùˆ Ø¨Ø§ Ø§ÛŒÙ…ÙˆØ¬ÛŒ Ù„ÛŒØ³Øª Ú©Ù†: {topic}"
+    answer = await ask_ai(prompt)
+    
+    if wait_msg_id:
+        await edit_message_text(chat_id, wait_msg_id, f"ðŸ’¡ <b>Ù¾ÛŒØ´Ù†Ù‡Ø§Ø¯Ù‡Ø§ÛŒ ÙØ±Ø§Ù†Ø³:</b>\n\n{answer}")
+    else:
+        await send_message(chat_id, f"ðŸ’¡ <b>Ù¾ÛŒØ´Ù†Ù‡Ø§Ø¯Ù‡Ø§ÛŒ ÙØ±Ø§Ù†Ø³:</b>\n\n{answer}")
+
+async def handle_challenge(chat_id, user_id):
+    if not await check_rate_limit(user_id):
+        await send_message(
+            chat_id, 
+            f"â³ Ú©Ù…ÛŒ ØµØ¨Ø± Ú©Ù† Ùˆ Ø¯ÙˆØ¨Ø§Ø±Ù‡ Ø§Ù…ØªØ­Ø§Ù† Ú©Ù†.\n"
+            f"Ø­Ø¯Ø§Ú©Ø«Ø± {AI_RATE_LIMIT} Ø¯Ø±Ø®ÙˆØ§Ø³Øª Ø¯Ø± Ø¯Ù‚ÛŒÙ‚Ù‡."
+        )
+        return
+    
+    await send_typing_action(chat_id)
+    wait_msg = await send_message(chat_id, "â³ Ø¯Ø± Ø­Ø§Ù„ Ø³Ø§Ø®Øª Ú†Ø§Ù„Ø´...")
+    wait_msg_id = wait_msg.get("result", {}).get("message_id") if wait_msg and wait_msg.get("ok") else None
+    
+    prompt = "ÛŒÚ© Ú†Ø§Ù„Ø´ ÙØ§Ù† Ùˆ Ú¯Ø±ÙˆÙ‡ÛŒ Ø¨Ø±Ø§ÛŒ Ù†ÙˆØ¬ÙˆØ§Ù†Ø§Ù† Ø¯Ø± ÛŒÚ© Ù¾ÛŒØ§Ù…â€ŒØ±Ø³Ø§Ù† Ø¨Ø³Ø§Ø². Ú†Ø§Ù„Ø´ Ø¨Ø§ÛŒØ¯ Ú©ÙˆØªØ§Ù‡ Ùˆ Ù‚Ø§Ø¨Ù„ Ø§Ù†Ø¬Ø§Ù… Ø¨Ø§Ø´Ø¯. ÙÙ‚Ø· Ø®ÙˆØ¯ Ú†Ø§Ù„Ø´ Ø±Ø§ Ø¨Ù†ÙˆÛŒØ³."
+    answer = await ask_ai(prompt)
+    
+    if wait_msg_id:
+        await edit_message_text(chat_id, wait_msg_id, f"ðŸ”¥ <b>Ú†Ø§Ù„Ø´ ÙØ±Ø§Ù†Ø³:</b>\n\n{answer}")
+    else:
+        await send_message(chat_id, f"ðŸ”¥ <b>Ú†Ø§Ù„Ø´ ÙØ±Ø§Ù†Ø³:</b>\n\n{answer}")
+
+async def handle_direct_chat(chat_id, text, user_id):
+    if not await check_rate_limit(user_id):
+        await send_message(
+            chat_id, 
+            f"â³ Ú©Ù…ÛŒ ØµØ¨Ø± Ú©Ù† Ùˆ Ø¯ÙˆØ¨Ø§Ø±Ù‡ Ø§Ù…ØªØ­Ø§Ù† Ú©Ù†.\n"
+            f"Ø­Ø¯Ø§Ú©Ø«Ø± {AI_RATE_LIMIT} Ø¯Ø±Ø®ÙˆØ§Ø³Øª Ø¯Ø± Ø¯Ù‚ÛŒÙ‚Ù‡."
+        )
+        return
+        
+    if len(text) > MAX_AI_PROMPT_LENGTH:
+        await send_message(
+            chat_id,
+            f"âš ï¸ Ù¾ÛŒØ§Ù… Ø´Ù…Ø§ Ø®ÛŒÙ„ÛŒ Ø·ÙˆÙ„Ø§Ù†ÛŒ Ø§Ø³Øª.\nØ­Ø¯Ø§Ú©Ø«Ø± {MAX_AI_PROMPT_LENGTH} Ú©Ø§Ø±Ø§Ú©ØªØ± Ù…Ø¬Ø§Ø² Ø§Ø³Øª."
+        )
+        return
+        
+    await send_typing_action(chat_id)
+    answer = await ask_ai(text)
+    await send_message(chat_id, f"ðŸ‡«ðŸ‡· <b>ÙØ±Ø§Ù†Ø³:</b>\n\n{answer}")
+
+
+===== handlers\base.py =====
+
+# handlers/base.py
+from core.api_client import send_message, edit_message_text
+from services.economy_service import get_balance, get_achievements, add_achievement
+from services.xp_service import get_user_stats, get_top_users
+
+# --- Ú©ÛŒØ¨ÙˆØ±Ø¯Ù‡Ø§ÛŒ Reply (Ø¨Ø±Ø§ÛŒ Ú¯Ø±ÙˆÙ‡â€ŒÙ‡Ø§) ---
+
+def get_main_menu_keyboard():
+    """Ù…Ù†ÙˆÛŒ Ø§ØµÙ„ÛŒ Ø¨Ø§ ReplyKeyboardMarkup - Ø¨Ø±Ø§ÛŒ Ù‡Ù…Ù‡ Ú†Øªâ€ŒÙ‡Ø§"""
+    return {
+        "keyboard": [
+            [{"text": "ðŸŽ® Ø¨Ø§Ø²ÛŒâ€ŒÙ‡Ø§"}, {"text": "ðŸ˜‚ Ø³Ø±Ú¯Ø±Ù…ÛŒ"}],
+            [{"text": "ðŸ† Ø±ØªØ¨Ù‡ Ù…Ù†"}, {"text": "ðŸ’° Ø§Ù‚ØªØµØ§Ø¯"}],
+            [{"text": "ðŸ›¡ Ù…Ø¯ÛŒØ±ÛŒØª"}, {"text": "âš™ï¸ ØªÙ†Ø¸ÛŒÙ…Ø§Øª"}],
+            [{"text": "â“ Ø±Ø§Ù‡Ù†Ù…Ø§"}]
+        ],
+        "resize_keyboard": True
+    }
+
+def get_games_reply_keyboard():
+    """Ú©ÛŒØ¨ÙˆØ±Ø¯ Ø¨Ø§Ø²ÛŒâ€ŒÙ‡Ø§ Ø¨Ø±Ø§ÛŒ Ú¯Ø±ÙˆÙ‡ (ReplyKeyboardMarkup)"""
+    return {
+        "keyboard": [
+            [{"text": "ðŸ§  Ø³ÙˆØ§Ù„ Ø¹Ù…ÙˆÙ…ÛŒ"}, {"text": "âœ‚ï¸ Ø³Ù†Ú¯ Ú©Ø§ØºØ° Ù‚ÛŒÚ†ÛŒ"}],
+            [{"text": "ðŸŽ¯ Ø­Ø¯Ø³ Ø¹Ø¯Ø¯"}, {"text": "ðŸ”™ Ø¨Ø§Ø²Ú¯Ø´Øª"}]
+        ],
+        "resize_keyboard": True
+    }
+
+def get_fun_reply_keyboard():
+    """Ú©ÛŒØ¨ÙˆØ±Ø¯ Ø³Ø±Ú¯Ø±Ù…ÛŒ Ø¨Ø±Ø§ÛŒ Ú¯Ø±ÙˆÙ‡ (ReplyKeyboardMarkup)"""
+    return {
+        "keyboard": [
+            [{"text": "ðŸŽ¯ Ø§Ù†ØªØ®Ø§Ø¨ ØªØµØ§Ø¯ÙÛŒ"}, {"text": "ðŸ“Š Ø±Ø£ÛŒâ€ŒÚ¯ÛŒØ±ÛŒ"}],
+            [{"text": "ðŸ¤” Ø­Ù‚ÛŒÙ‚Øª"}, {"text": "ðŸ”¥ Ø¬Ø±Ø¦Øª"}],
+            [{"text": "ðŸ”™ Ø¨Ø§Ø²Ú¯Ø´Øª"}]
+        ],
+        "resize_keyboard": True
+    }
+
+def get_economy_reply_keyboard():
+    """Ú©ÛŒØ¨ÙˆØ±Ø¯ Ø§Ù‚ØªØµØ§Ø¯ Ø¨Ø±Ø§ÛŒ Ú¯Ø±ÙˆÙ‡ (ReplyKeyboardMarkup)"""
+    return {
+        "keyboard": [
+            [{"text": "ðŸ’° Ù…ÙˆØ¬ÙˆØ¯ÛŒ"}, {"text": "ðŸŽ Ø±ÙˆØ²Ø§Ù†Ù‡"}],
+            [{"text": "ðŸ’¼ Ú©Ø§Ø±"}, {"text": "ðŸª™ Ø´ÛŒØ± ÛŒØ§ Ø®Ø·"}],
+            [{"text": "ðŸª ÙØ±ÙˆØ´Ú¯Ø§Ù‡"}, {"text": "ðŸ”™ Ø¨Ø§Ø²Ú¯Ø´Øª"}]
+        ],
+        "resize_keyboard": True
+    }
+
+# --- Ú©ÛŒØ¨ÙˆØ±Ø¯Ù‡Ø§ÛŒ Inline (Ø¨Ø±Ø§ÛŒ Ù¾ÛŒÙˆÛŒ) ---
+
+def get_games_inline_keyboard():
+    """Ù…Ù†ÙˆÛŒ Ø¨Ø§Ø²ÛŒâ€ŒÙ‡Ø§"""
+    return {
+        "inline_keyboard": [
+            [{"text": "ðŸ§  Ø³ÙˆØ§Ù„ Ø¹Ù…ÙˆÙ…ÛŒ", "callback_data": "game_trivia"}],
+            [{"text": "âœ‚ï¸ Ø³Ù†Ú¯ Ú©Ø§ØºØ° Ù‚ÛŒÚ†ÛŒ", "callback_data": "game_rps"}],
+            [{"text": "ðŸŽ¯ Ø­Ø¯Ø³ Ø¹Ø¯Ø¯", "callback_data": "game_guess"}],
+            [{"text": "ðŸ  Ù…Ù†ÙˆÛŒ Ø§ØµÙ„ÛŒ", "callback_data": "main_menu"}]
+        ]
+    }
+
+def get_start_inline_keyboard():
+    """Ú©ÛŒØ¨ÙˆØ±Ø¯ Ø´Ø±ÙˆØ¹ Ø¨Ø±Ø§ÛŒ Ù¾ÛŒÙˆÛŒ"""
+    return {
+        "inline_keyboard": [
+            [{"text": "ðŸ“– Ø±Ø§Ù‡Ù†Ù…Ø§ÛŒ Ú©Ø§Ù…Ù„", "callback_data": "help_menu"}],
+            [{"text": "ðŸ’³ Ø®Ø±ÛŒØ¯ Premium", "callback_data": "premium_menu"}]
+        ]
+    }
+
+def get_back_keyboard(callback_data="main_menu"):
+    """Ø³Ø§Ø®Øª Ø¯Ú©Ù…Ù‡ Ø¨Ø§Ø²Ú¯Ø´Øª Ø¨Ø§ Ù‚Ø§Ø¨Ù„ÛŒØª ØªØ¹ÛŒÛŒÙ† Ù…Ù‚ØµØ¯"""
+    return {
+        "inline_keyboard": [
+            [{"text": "ðŸ”™ Ø¨Ø§Ø²Ú¯Ø´Øª", "callback_data": callback_data}]
+        ]
+    }
+
+def get_back_inline_keyboard():
+    """Ø¯Ú©Ù…Ù‡ Ø¨Ø§Ø²Ú¯Ø´Øª Ø¨Ù‡ Ù…Ù†ÙˆÛŒ Ø§ØµÙ„ÛŒ (Ù‡Ù…Ø§Ù† get_back_keyboard)"""
+    return get_back_keyboard()
+
+def get_help_keyboard():
+    """Ù…Ù†ÙˆÛŒ Ø±Ø§Ù‡Ù†Ù…Ø§"""
+    return {
+        "inline_keyboard": [
+            [{"text": "ðŸ¤– Ù‡ÙˆØ´ Ù…ØµÙ†ÙˆØ¹ÛŒ", "callback_data": "help_ai"}],
+            [{"text": "ðŸ’° Ø§Ù‚ØªØµØ§Ø¯", "callback_data": "help_economy"}],
+            [{"text": "ðŸŽ® Ø¨Ø§Ø²ÛŒâ€ŒÙ‡Ø§", "callback_data": "help_games"}],
+            [{"text": "ðŸ›¡ Ù…Ø¯ÛŒØ±ÛŒØª", "callback_data": "help_moderation"}],
+            [{"text": "ðŸ‘¤ Ù¾Ø±ÙˆÙØ§ÛŒÙ„", "callback_data": "help_profile"}],
+            [{"text": "ðŸ  Ù…Ù†ÙˆÛŒ Ø§ØµÙ„ÛŒ", "callback_data": "main_menu"}]
+        ]
+    }
+
+def get_back_to_menu_keyboard():
+    """Ø¯Ú©Ù…Ù‡ Ø¨Ø§Ø²Ú¯Ø´Øª Ø¨Ù‡ Ù…Ù†ÙˆÛŒ Ø§ØµÙ„ÛŒ"""
+    return get_back_keyboard()
+
+# --- Ù‡Ù†Ø¯Ù„Ø±Ù‡Ø§ÛŒ Ø§ØµÙ„ÛŒ ---
+
+async def handle_start(chat_id, chat_type="private"):
+    text = (
+        "ðŸ¤– <b>RafiBot</b>\n\n"
+        "Ø±ÙÛŒÙ‚ Ù‡ÙˆØ´Ù…Ù†Ø¯ Ú¯Ø±ÙˆÙ‡â€ŒÙ‡Ø§ÛŒ Ø´Ù…Ø§!\n"
+        "Ù…Ù† Ù…Ø¯ÛŒØ±ÛŒØª Ú¯Ø±ÙˆÙ‡ØŒ Ø³Ø±Ú¯Ø±Ù…ÛŒ Ùˆ Ø³ÛŒØ³ØªÙ… Ø§Ù…ØªÛŒØ§Ø²Ø¯Ù‡ÛŒ Ø±Ùˆ ØªØ±Ú©ÛŒØ¨ Ù…ÛŒâ€ŒÚ©Ù†Ù….\n\n"
+        "ðŸ‘‡ Ø§Ø² Ù…Ù†ÙˆÛŒ Ù¾Ø§ÛŒÛŒÙ† Ø§Ù†ØªØ®Ø§Ø¨ Ú©Ù†:"
+    )
+    await send_message(chat_id, text, reply_markup=get_main_menu_keyboard())
+    await send_message(
+        chat_id, 
+        "âœ¨ Ø¨Ø±Ø§ÛŒ Ø§Ø¯Ø§Ù…Ù‡ Ø±ÙˆÛŒ Ø¯Ú©Ù…Ù‡ Ø²ÛŒØ± Ú©Ù„ÛŒÚ© Ú©Ù†:",
+        reply_markup=get_start_inline_keyboard()
+    )
+
+async def handle_help(chat_id, chat_type="private"):
+    if chat_type == "private":
+        text = "â“ <b>Ø±Ø§Ù‡Ù†Ù…Ø§ÛŒ Ø±ÙÛŒâ€ŒØ¨Ø§Øª</b>\n\nØ¨Ø±Ø§ÛŒ Ù…Ø´Ø§Ù‡Ø¯Ù‡ Ù‡Ø± Ø¨Ø®Ø´ØŒ Ø±ÙˆÛŒ Ø¯Ú©Ù…Ù‡ Ù…Ø±Ø¨ÙˆØ·Ù‡ Ú©Ù„ÛŒÚ© Ú©Ù†:"
+        await send_message(chat_id, text, reply_markup=get_help_keyboard())
+    else:
+        text = (
+            "â“ <b>Ø±Ø§Ù‡Ù†Ù…Ø§ÛŒ Ø±ÙÛŒâ€ŒØ¨Ø§Øª</b>\n\n"
+            "ðŸ“– Ø¨Ø±Ø§ÛŒ Ù…Ø´Ø§Ù‡Ø¯Ù‡ Ø±Ø§Ù‡Ù†Ù…Ø§ØŒ Ø¨Ù‡ Ù¾ÛŒÙˆÛŒ Ø¨Ø§Øª Ø¨Ø±Ùˆ:\n"
+            "@rafibot\n\n"
+            "Ø¯Ø³ØªÙˆØ±Ø§Øª Ø§ØµÙ„ÛŒ:\n"
+            "/help - Ù†Ù…Ø§ÛŒØ´ Ø§ÛŒÙ† Ù¾ÛŒØ§Ù…\n"
+            "/profile - Ù¾Ø±ÙˆÙØ§ÛŒÙ„ Ø´Ù…Ø§\n"
+            "/top - Ø¨Ø±ØªØ±ÛŒÙ†â€ŒÙ‡Ø§\n"
+            "/rules - Ù‚ÙˆØ§Ù†ÛŒÙ† Ú¯Ø±ÙˆÙ‡"
+        )
+        await send_message(chat_id, text)
+
+async def handle_games_menu(chat_id, chat_type="private"):
+    if chat_type == "private":
+        text = "ðŸŽ® <b>Ù…Ù†ÙˆÛŒ Ø¨Ø§Ø²ÛŒâ€ŒÙ‡Ø§</b>\n\nÛŒÚ© Ø¨Ø§Ø²ÛŒ Ø±Ø§ Ø¨Ø±Ø§ÛŒ Ø´Ø±ÙˆØ¹ Ø§Ù†ØªØ®Ø§Ø¨ Ú©Ù†:"
+        await send_message(chat_id, text, reply_markup=get_games_inline_keyboard())
+    else:
+        text = "ðŸŽ® <b>Ù…Ù†ÙˆÛŒ Ø¨Ø§Ø²ÛŒâ€ŒÙ‡Ø§</b>\n\nØ§Ø² Ø¯Ú©Ù…Ù‡â€ŒÙ‡Ø§ÛŒ Ø²ÛŒØ± Ø§Ù†ØªØ®Ø§Ø¨ Ú©Ù†:"
+        await send_message(chat_id, text, reply_markup=get_games_reply_keyboard())
+
+async def handle_fun_menu(chat_id, chat_type="private"):
+    if chat_type == "private":
+        text = (
+            "ðŸ˜‚ <b>Ø¨Ø®Ø´ ÙØ§Ù†</b>\n\n"
+            "Ø¯Ø³ØªÙˆØ±Ø§Øª:\n"
+            "<code>/who</code> - Ø§Ù†ØªØ®Ø§Ø¨ ØªØµØ§Ø¯ÙÛŒ\n"
+            "<code>/vote [Ù…ÙˆØ¶ÙˆØ¹]</code> - Ø±Ø£ÛŒâ€ŒÚ¯ÛŒØ±ÛŒ\n"
+            "<code>/truth</code> - Ø­Ù‚ÛŒÙ‚Øª\n"
+            "<code>/dare</code> - Ø¬Ø±Ø¦Øª"
+        )
+        await send_message(chat_id, text, reply_markup=get_back_keyboard())
+    else:
+        text = "ðŸ˜‚ <b>Ø¨Ø®Ø´ ÙØ§Ù†</b>\n\nØ§Ø² Ø¯Ú©Ù…Ù‡â€ŒÙ‡Ø§ÛŒ Ø²ÛŒØ± Ø§Ù†ØªØ®Ø§Ø¨ Ú©Ù†:"
+        await send_message(chat_id, text, reply_markup=get_fun_reply_keyboard())
+
+async def handle_economy_menu(chat_id, chat_type="private"):
+    if chat_type == "private":
+        text = (
+            "ðŸ’° <b>Ø§Ù‚ØªØµØ§Ø¯</b>\n\n"
+            "Ø¯Ø³ØªÙˆØ±Ø§Øª:\n"
+            "/balance - Ù…ÙˆØ¬ÙˆØ¯ÛŒ\n"
+            "/daily - Ù¾Ø§Ø¯Ø§Ø´ Ø±ÙˆØ²Ø§Ù†Ù‡\n"
+            "/work - Ú©Ø§Ø± Ú©Ø±Ø¯Ù†\n"
+            "/coinflip - Ø´ÛŒØ± ÛŒØ§ Ø®Ø·"
+        )
+        await send_message(chat_id, text, reply_markup=get_back_keyboard())
+    else:
+        text = "ðŸ’° <b>Ø§Ù‚ØªØµØ§Ø¯</b>\n\nØ§Ø² Ø¯Ú©Ù…Ù‡â€ŒÙ‡Ø§ÛŒ Ø²ÛŒØ± Ø§Ù†ØªØ®Ø§Ø¨ Ú©Ù†:"
+        await send_message(chat_id, text, reply_markup=get_economy_reply_keyboard())
+
+async def handle_profile(chat_id, user_id, first_name):
+    stats = await get_user_stats(user_id, chat_id)
+    balance = await get_balance(user_id, chat_id)
+    
+    await add_achievement(user_id, chat_id, "ðŸ’¬ Ø§ÙˆÙ„ÛŒÙ† Ù¾ÛŒØ§Ù…")
+    
+    badges = await get_achievements(user_id, chat_id)
+    badges_text = "\n".join([f"ðŸ… {b}" for b in badges]) if badges else "Ø¨Ø¯ÙˆÙ† Ù…Ø¯Ø§Ù„"
+    
+    text = (
+        f"ðŸ† <b>Ù¾Ø±ÙˆÙØ§ÛŒÙ„ Ú©Ø§Ø±Ø¨Ø±ÛŒ</b>\n\n"
+        f"ðŸ‘¤ Ù†Ø§Ù…: <b>{first_name}</b>\n"
+        f"â­ Ø³Ø·Ø­: <b>{stats['level']}</b>\n"
+        f"âš¡ Ø§Ù…ØªÛŒØ§Ø² (XP): <b>{stats['xp']}</b>\n"
+        f"ðŸ’° Ø³Ú©Ù‡: <b>{balance}</b>\n\n"
+        f"ðŸŽ– <b>Ø¯Ø³ØªØ§ÙˆØ±Ø¯Ù‡Ø§:</b>\n{badges_text}\n\n"
+        f"ðŸŽ® Ø¨Ø±Ø§ÛŒ Ú©Ø³Ø¨ Ø§Ù…ØªÛŒØ§Ø² Ø¨ÛŒØ´ØªØ±ØŒ Ø¯Ø± Ø¨Ø§Ø²ÛŒâ€ŒÙ‡Ø§ Ø´Ø±Ú©Øª Ú©Ù†!"
+    )
+    await send_message(chat_id, text, reply_markup=get_back_keyboard())
+
+async def handle_leaderboard(chat_id):
+    top_users = await get_top_users(chat_id)
+    if not top_users:
+        await send_message(
+            chat_id, 
+            "ðŸ“Š Ù‡Ù†ÙˆØ² Ú©Ø³ÛŒ Ø¯Ø± Ø§ÛŒÙ† Ú¯Ø±ÙˆÙ‡ Ø§Ù…ØªÛŒØ§Ø²ÛŒ Ú©Ø³Ø¨ Ù†Ú©Ø±Ø¯Ù‡ Ø§Ø³Øª.\n"
+            "Ø§ÙˆÙ„ÛŒÙ† Ù†ÙØ± Ø¨Ø§Ø´! ðŸš€",
+            reply_markup=get_back_keyboard()
+        )
+        return
+        
+    text = "ðŸ“Š <b>Ø¨Ø±ØªØ±ÛŒÙ† Ø§Ø¹Ø¶Ø§ÛŒ Ú¯Ø±ÙˆÙ‡</b>\n\n"
+    medals = ["ðŸ¥‡", "ðŸ¥ˆ", "ðŸ¥‰", "4ï¸âƒ£", "5ï¸âƒ£"]
+    
+    for i, user in enumerate(top_users):
+        text += f"{medals[i]} Ú©Ø§Ø±Ø¨Ø± {user['user_id']} - Ø³Ø·Ø­ {user['level']} ({user['xp']} XP)\n"
+        
+    await send_message(chat_id, text, reply_markup=get_back_keyboard())
+
+async def handle_settings_menu(chat_id, chat_type="private"):
+    text = (
+        "âš™ï¸ <b>ØªÙ†Ø¸ÛŒÙ…Ø§Øª</b>\n\n"
+        "ðŸ’¡ Ø§Ø² Ø¯Ø³ØªÙˆØ±Ø§Øª Ø²ÛŒØ± Ø§Ø³ØªÙØ§Ø¯Ù‡ Ú©Ù†ÛŒØ¯:\n"
+        "<code>/setwelcome [Ù…ØªÙ†]</code>\n"
+        "<code>/setrules [Ù…ØªÙ†]</code>\n"
+        "<code>/setantilink [on/off]</code>"
+    )
+    await send_message(chat_id, text, reply_markup=get_back_keyboard())
+
+def get_main_inline_keyboard():
+    """Ú©ÙŠØ¨Ø±Ø¯ Ø´ÛŒØ´Ù‡â€ŒØ§ÛŒ Ù…Ù†ÙˆÛŒ Ø§ØµÙ„ÛŒ (Ø¨Ø±Ø§ÛŒ Ø§Ø³ØªÙØ§Ø¯Ù‡ Ø¯Ø§Ø®Ù„ Ù…Ù†ÙˆÙ‡Ø§ÛŒ Ø´ÛŒØ´Ù‡â€ŒØ§ÛŒ)"""
+    return {
+        "inline_keyboard": [
+            [{"text": "ðŸŽ® Ø¨Ø§Ø²ÛŒâ€ŒÙ‡Ø§", "callback_data": "games_menu"}],
+            [{"text": "ðŸ’° Ø§Ù‚ØªØµØ§Ø¯", "callback_data": "economy_menu"}],
+            [{"text": "ðŸ“– Ø±Ø§Ù‡Ù†Ù…Ø§", "callback_data": "help_menu"}],
+            [{"text": "ðŸ’³ Ø®Ø±ÛŒØ¯ Premium", "callback_data": "premium_menu"}]
+        ]
+    }
+
+
+===== handlers\callbacks.py =====
+
+# handlers/callbacks.py
+import random
+from core.api_client import answer_callback, edit_message_text, delete_message, send_message
+from services.xp_service import add_xp
+from handlers.games import active_trivias, handle_trivia
+from handlers.fun import process_vote
+from services.group_service import toggle_setting, get_group_settings
+from services.permission_service import is_group_admin
+from handlers.admin import get_admin_panel_keyboard
+from handlers.base import (
+    get_back_keyboard, 
+    get_help_keyboard,
+    get_games_inline_keyboard,
+    get_main_menu_keyboard
+)
+
+def get_rps_keyboard():
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "ðŸª¨ Ø³Ù†Ú¯", "callback_data": "rps_rock"},
+                {"text": "ðŸ“„ Ú©Ø§ØºØ°", "callback_data": "rps_paper"},
+                {"text": "âœ‚ï¸ Ù‚ÛŒÚ†ÛŒ", "callback_data": "rps_scissors"}
+            ],
+            [{"text": "ðŸ”™ Ø¨Ø§Ø²Ú¯Ø´Øª Ø¨Ù‡ Ø¨Ø§Ø²ÛŒâ€ŒÙ‡Ø§", "callback_data": "games_menu"}]
+        ]
+    }
+
+async def handle_callback_query(callback_query):
+    data = callback_query.get("data")
+    user_id = callback_query["from"]["id"]
+    first_name = callback_query["from"].get("first_name", "Ú©Ø§Ø±Ø¨Ø±")
+    callback_id = callback_query.get("id")
+    
+    message = callback_query.get("message") or callback_query.get("maybe_inaccessible_message")
+    if not message:
+        await answer_callback(callback_id, "âŒ Ù¾ÛŒØ§Ù… ÛŒØ§ÙØª Ù†Ø´Ø¯", show_alert=True)
+        return
+
+    chat_id = message.get("chat", {}).get("id")
+    message_id = message.get("message_id")
+    
+    if not chat_id or not message_id:
+        await answer_callback(callback_id, "âŒ Ø®Ø·Ø§ Ø¯Ø± Ø¯Ø±ÛŒØ§ÙØª Ø§Ø·Ù„Ø§Ø¹Ø§Øª", show_alert=True)
+        return
+
+    # ---------------- Ù…Ù†ÙˆÙ‡Ø§ÛŒ Ø§ØµÙ„ÛŒ ----------------
+    if data == "main_menu":
+        await delete_message(chat_id, message_id)
+        await send_message(
+            chat_id, 
+            "ðŸ¤– <b>RafiBot</b>\n\nÛŒÚ©ÛŒ Ø§Ø² Ú¯Ø²ÛŒÙ†Ù‡â€ŒÙ‡Ø§ Ø±Ø§ Ø§Ù†ØªØ®Ø§Ø¨ Ú©Ù†ÛŒØ¯:",
+            reply_markup=get_main_menu_keyboard()
+        )
+        await answer_callback(callback_id) # Ù¾Ø§ÛŒØ§Ù† Ù„ÙˆØ¯ÛŒÙ†Ú¯
+
+    elif data == "help_menu":
+        text = "â“ <b>Ø±Ø§Ù‡Ù†Ù…Ø§ÛŒ Ø±ÙÛŒâ€ŒØ¨Ø§Øª</b>\n\nØ¨Ø±Ø§ÛŒ Ù…Ø´Ø§Ù‡Ø¯Ù‡ Ù‡Ø± Ø¨Ø®Ø´ØŒ Ø±ÙˆÛŒ Ø¯Ú©Ù…Ù‡ Ù…Ø±Ø¨ÙˆØ·Ù‡ Ú©Ù„ÛŒÚ© Ú©Ù†:"
+        await edit_message_text(chat_id, message_id, text, reply_markup=get_help_keyboard())
+        await answer_callback(callback_id)
+    
+    elif data == "help_ai":
+        text = (
+            "ðŸ¤– <b>Ù‡ÙˆØ´ Ù…ØµÙ†ÙˆØ¹ÛŒ (ÙØ±Ø§Ù†Ø³)</b>\n\n"
+            "Ø¯Ø³ØªÙˆØ±Ø§Øª:\n"
+            "<code>/ask [Ø³ÙˆØ§Ù„]</code> - Ù¾Ø±Ø³ÛŒØ¯Ù† Ø³ÙˆØ§Ù„ Ø§Ø² ÙØ±Ø§Ù†Ø³\n"
+            "<code>/suggest [Ù…ÙˆØ¶ÙˆØ¹]</code> - Ú¯Ø±ÙØªÙ† Ø§ÛŒØ¯Ù‡ Ø§Ø² ÙØ±Ø§Ù†Ø³\n"
+            "<code>/challenge</code> - Ø³Ø§Ø®Øª Ú†Ø§Ù„Ø´ ØªØµØ§Ø¯ÙÛŒ\n\n"
+            "ðŸ’¡ Ù…ÛŒâ€ŒØªÙˆØ§Ù†ÛŒ Ú©Ù„Ù…Ù‡ Â«ÙØ±Ø§Ù†Ø³Â» Ø±Ø§ Ø§ÙˆÙ„ Ù¾ÛŒØ§Ù… Ø¨ÛŒØ§ÙˆØ±ÛŒ ÛŒØ§ Ø±ÙˆÛŒ Ù¾ÛŒØ§Ù… Ø¨Ø§Øª Ø±ÛŒÙ¾Ù„Ø§ÛŒ Ú©Ù†ÛŒ!"
+        )
+        await edit_message_text(chat_id, message_id, text, reply_markup=get_back_keyboard("help_menu"))
+        await answer_callback(callback_id)
+    
+    elif data == "help_economy":
+        text = (
+            "ðŸ’° <b>Ø§Ù‚ØªØµØ§Ø¯ Ùˆ Ø³Ú©Ù‡</b>\n\n"
+            "<code>/balance</code> - Ù†Ù…Ø§ÛŒØ´ Ù…ÙˆØ¬ÙˆØ¯ÛŒ Ø´Ù…Ø§\n"
+            "<code>/daily</code> - Ø¯Ø±ÛŒØ§ÙØª Ù¾Ø§Ø¯Ø§Ø´ Ø±ÙˆØ²Ø§Ù†Ù‡ (Ø¨Ø§ Ø³ÛŒØ³ØªÙ… Ø§Ø³ØªØ±ÛŒÚ©)\n"
+            "<code>/work</code> - Ú©Ø§Ø± Ú©Ø±Ø¯Ù† Ùˆ Ú©Ø³Ø¨ Ø³Ú©Ù‡\n"
+            "<code>/coinflip [Ø´ÛŒØ±/Ø®Ø·] [Ù…Ø¨Ù„Øº]</code> - Ø´Ø±Ø·â€ŒØ¨Ù†Ø¯ÛŒ Ø´ÛŒØ± ÛŒØ§ Ø®Ø·\n"
+            "<code>/rob</code> - (Ø±ÛŒÙ¾Ù„Ø§ÛŒ Ø±ÙˆÛŒ Ú©Ø§Ø±Ø¨Ø±) Ø¯Ø²Ø¯ÛŒ Ø§Ø² Ø³Ú©Ù‡ Ø¯ÛŒÚ¯Ø±Ø§Ù†\n"
+            "<code>/give [Ù…Ø¨Ù„Øº]</code> - (Ø±ÛŒÙ¾Ù„Ø§ÛŒ Ø±ÙˆÛŒ Ú©Ø§Ø±Ø¨Ø±) Ù‡Ø¯ÛŒÙ‡ Ø¯Ø§Ø¯Ù† Ø³Ú©Ù‡\n"
+            "<code>/shop</code> - Ù†Ù…Ø§ÛŒØ´ ÙØ±ÙˆØ´Ú¯Ø§Ù‡\n"
+            "<code>/buy [Ø¢ÛŒØ¯ÛŒ Ø¢ÛŒØªÙ…]</code> - Ø®Ø±ÛŒØ¯ Ø§Ø² ÙØ±ÙˆØ´Ú¯Ø§Ù‡"
+        )
+        await edit_message_text(chat_id, message_id, text, reply_markup=get_back_keyboard("help_menu"))
+        await answer_callback(callback_id)
+    
+    elif data == "help_games":
+        text = (
+            "ðŸŽ® <b>Ø¨Ø§Ø²ÛŒâ€ŒÙ‡Ø§ Ùˆ ÙØ§Ù†</b>\n\n"
+            "<code>/trivia</code> - Ù…Ø³Ø§Ø¨Ù‚Ù‡ Ø¹Ù…ÙˆÙ…ÛŒ Û´ Ú¯Ø²ÛŒÙ†Ù‡â€ŒØ§ÛŒ\n"
+            "<code>/who</code> - Ø§Ù†ØªØ®Ø§Ø¨ ÛŒÚ© Ù†ÙØ± ØªØµØ§Ø¯ÙÛŒ Ø§Ø² Ø§ÙØ±Ø§Ø¯ ÙØ¹Ø§Ù„\n"
+            "<code>/vote [Ù…ÙˆØ¶ÙˆØ¹]</code> - Ø±Ø£ÛŒâ€ŒÚ¯ÛŒØ±ÛŒ Ú¯Ø±ÙˆÙ‡ÛŒ\n"
+            "<code>/truth</code> - Ø³ÙˆØ§Ù„ Ø­Ù‚ÛŒÙ‚Øª\n"
+            "<code>/dare</code> - Ú†Ø§Ù„Ø´ Ø¬Ø±Ø¦Øª"
+        )
+        await edit_message_text(chat_id, message_id, text, reply_markup=get_back_keyboard("help_menu"))
+        await answer_callback(callback_id)
+    
+    elif data == "help_moderation":
+        text = (
+            "ðŸ›¡ <b>Ù…Ø¯ÛŒØ±ÛŒØª Ú¯Ø±ÙˆÙ‡ (ÙÙ‚Ø· Ø§Ø¯Ù…ÛŒÙ†â€ŒÙ‡Ø§)</b>\n\n"
+            "<code>/warn</code> - (Ø±ÛŒÙ¾Ù„Ø§ÛŒ) Ø¯Ø§Ø¯Ù† Ø§Ø®Ø·Ø§Ø± Ø¨Ù‡ Ú©Ø§Ø±Ø¨Ø±\n"
+            "<code>/mute</code> - (Ø±ÛŒÙ¾Ù„Ø§ÛŒ) Ù…ÛŒÙˆØª Ú©Ø±Ø¯Ù† Ú©Ø§Ø±Ø¨Ø±\n"
+            "<code>/unmute</code> - (Ø±ÛŒÙ¾Ù„Ø§ÛŒ) Ø¢Ø²Ø§Ø¯ Ú©Ø±Ø¯Ù† Ú©Ø§Ø±Ø¨Ø±\n"
+            "<code>/ban</code> - (Ø±ÛŒÙ¾Ù„Ø§ÛŒ) Ø¨Ù† Ù…Ø¬Ø§Ø²ÛŒ Ú©Ø§Ø±Ø¨Ø±\n"
+            "<code>/kick</code> - (Ø±ÛŒÙ¾Ù„Ø§ÛŒ) Ø§Ø®Ø±Ø§Ø¬ Ú©Ø§Ø±Ø¨Ø± Ø§Ø² Ú¯Ø±ÙˆÙ‡\n"
+            "<code>/filter [Ú©Ù„Ù…Ù‡]</code> - Ù…Ø³Ø¯ÙˆØ¯ Ú©Ø±Ø¯Ù† Ú©Ù„Ù…Ù‡ Ù…Ù…Ù†ÙˆØ¹Ù‡\n"
+            "<code>/setwelcome [Ù…ØªÙ†]</code> - ØªÙ†Ø¸ÛŒÙ… Ù¾ÛŒØ§Ù… Ø®ÙˆØ´â€ŒØ¢Ù…Ø¯Ú¯ÙˆÛŒÛŒ\n"
+            "<code>/setrules [Ù…ØªÙ†]</code> - ØªÙ†Ø¸ÛŒÙ… Ù‚ÙˆØ§Ù†ÛŒÙ† Ú¯Ø±ÙˆÙ‡\n"
+            "<code>/rules</code> - Ù…Ø´Ø§Ù‡Ø¯Ù‡ Ù‚ÙˆØ§Ù†ÛŒÙ† Ú¯Ø±ÙˆÙ‡\n"
+            "<code>/setantilink [on/off]</code> - Ø®Ø§Ù…ÙˆØ´/Ø±ÙˆØ´Ù† Ú©Ø±Ø¯Ù† Ø­Ø°Ù Ù„ÛŒÙ†Ú©â€ŒÙ‡Ø§\n"
+            "<code>/logs</code> - Ù…Ø´Ø§Ù‡Ø¯Ù‡ Ø¢Ø®Ø±ÛŒÙ† Ø§Ù‚Ø¯Ø§Ù…Ø§Øª Ø§Ø¯Ù…ÛŒÙ†â€ŒÙ‡Ø§\n"
+            "<code>/endvote</code> - Ù¾Ø§ÛŒØ§Ù† Ø¯Ø§Ø¯Ù† Ø¨Ù‡ Ù†Ø¸Ø±Ø³Ù†Ø¬ÛŒ ÙØ¹Ø§Ù„"
+        )
+        await edit_message_text(chat_id, message_id, text, reply_markup=get_back_keyboard("help_menu"))
+        await answer_callback(callback_id)
+    
+    elif data == "help_profile":
+        text = (
+            "ðŸ‘¤ <b>Ù¾Ø±ÙˆÙØ§ÛŒÙ„ Ùˆ Ù„ÙˆÙ„</b>\n\n"
+            "<code>/profile</code> - Ù†Ù…Ø§ÛŒØ´ Ù¾Ø±ÙˆÙØ§ÛŒÙ„ Ø´Ù…Ø§ (Ø³Ø·Ø­ØŒ Ø³Ú©Ù‡ØŒ Ù…Ø¯Ø§Ù„â€ŒÙ‡Ø§)\n"
+            "<code>/top</code> - Ù„ÛŒØ³Øª Ø¨Ø±ØªØ±ÛŒÙ† Ø§Ø¹Ø¶Ø§ÛŒ Ú¯Ø±ÙˆÙ‡\n\n"
+            "ðŸ’¡ Ø¨Ø§ Ø§Ø±Ø³Ø§Ù„ Ù¾ÛŒØ§Ù… Ø¯Ø± Ú¯Ø±ÙˆÙ‡ØŒ Ø§Ù…ØªÛŒØ§Ø² (XP) Ú©Ø³Ø¨ Ù…ÛŒâ€ŒÚ©Ù†ÛŒ!\n"
+            "Ù‡Ø± Û±Û°Û° Ø§Ù…ØªÛŒØ§Ø² = Û± Ø³Ø·Ø­"
+        )
+        await edit_message_text(chat_id, message_id, text, reply_markup=get_back_keyboard("help_menu"))
+        await answer_callback(callback_id)
+    
+    elif data == "premium_menu":
+        text = (
+            "ðŸ’³ <b>Ù†Ø³Ø®Ù‡ Premium</b>\n\n"
+            "ÙˆÛŒÚ˜Ú¯ÛŒâ€ŒÙ‡Ø§ÛŒ Ù†Ø³Ø®Ù‡ Premium:\n"
+            "ðŸ”¹ ÙÛŒÙ„ØªØ± Ú©Ù„Ù…Ø§Øª Ù†Ø§Ù…Ø­Ø¯ÙˆØ¯ (Ø±Ø§ÛŒÚ¯Ø§Ù† ÙÙ‚Ø· Û³ Ú©Ù„Ù…Ù‡)\n"
+            "ðŸ”¹ Ø¯Ø³ØªØ±Ø³ÛŒ Ø¨Ù‡ Ø¢Ù…Ø§Ø± Ø¯Ù‚ÛŒÙ‚ Ú¯Ø±ÙˆÙ‡\n"
+            "ðŸ”¹ Ø¨Ø§Ø²ÛŒâ€ŒÙ‡Ø§ÛŒ Ø§Ø®ØªØµØ§ØµÛŒ Ø¨ÛŒØ´ØªØ±\n"
+            "ðŸ”¹ Ù‡ÙˆØ´ Ù…ØµÙ†ÙˆØ¹ÛŒ Ù¾ÛŒØ´Ø±ÙØªÙ‡\n\n"
+            "Ø¨Ø±Ø§ÛŒ Ø®Ø±ÛŒØ¯ Ø¨Ø§ Ù¾Ø´ØªÛŒØ¨Ø§Ù†ÛŒ Ø¯Ø± Ø§Ø±ØªØ¨Ø§Ø· Ø¨Ø§Ø´ÛŒØ¯: @Iambrrr" # <--- Ø§ÛŒÙ†Ø¬Ø§ ØªØºÛŒÛŒØ± Ú©Ø±Ø¯
+        )
+        await edit_message_text(chat_id, message_id, text, reply_markup=get_back_keyboard("help_menu"))
+        await answer_callback(callback_id)
+        
+    # ---------------- Ø¨Ø®Ø´ Ø¨Ø§Ø²ÛŒâ€ŒÙ‡Ø§ ----------------
+    elif data == "games_menu":
+        text = "ðŸŽ® <b>Ù…Ù†ÙˆÛŒ Ø¨Ø§Ø²ÛŒâ€ŒÙ‡Ø§</b>\n\nÛŒÚ© Ø¨Ø§Ø²ÛŒ Ø±Ø§ Ø¨Ø±Ø§ÛŒ Ø´Ø±ÙˆØ¹ Ø§Ù†ØªØ®Ø§Ø¨ Ú©Ù†:"
+        await edit_message_text(chat_id, message_id, text, reply_markup=get_games_inline_keyboard())
+        await answer_callback(callback_id)
+
+    elif data == "game_guess":
+        await edit_message_text(
+            chat_id, message_id, 
+            "ðŸŽ¯ <b>Ø­Ø¯Ø³ Ø¹Ø¯Ø¯</b>\n\nØ§ÛŒÙ† Ø¨Ø®Ø´ Ø¨Ù‡â€ŒØ²ÙˆØ¯ÛŒ Ø§Ø¶Ø§ÙÙ‡ Ø®ÙˆØ§Ù‡Ø¯ Ø´Ø¯!",
+            reply_markup=get_back_keyboard("games_menu")
+        )
+        await answer_callback(callback_id)
+        
+    elif data == "game_rps":
+        await edit_message_text(
+            chat_id, message_id, 
+            "âœ‚ï¸ <b>Ø³Ù†Ú¯ØŒ Ú©Ø§ØºØ°ØŒ Ù‚ÛŒÚ†ÛŒ</b>\n\nØ§Ù†ØªØ®Ø§Ø¨ Ú©Ù†:",
+            reply_markup=get_rps_keyboard()
+        )
+        await answer_callback(callback_id)
+        
+    elif data == "game_trivia":
+        await handle_trivia(chat_id)
+        await edit_message_text(
+            chat_id, message_id, 
+            "ðŸ§  Ù…Ø³Ø§Ø¨Ù‚Ù‡ Ø´Ø±ÙˆØ¹ Ø´Ø¯! Ø¨Ù‡ Ù¾ÛŒØ§Ù… Ø¨Ø§Ù„Ø§ÛŒÛŒ Ù†Ú¯Ø§Ù‡ Ú©Ù†ÛŒØ¯.\n\nØ¨Ø±Ø§ÛŒ Ø¨Ø§Ø²Ú¯Ø´Øª Ø¨Ù‡ Ù…Ù†Ùˆ Ø±ÙˆÛŒ Ø¯Ú©Ù…Ù‡ Ø²ÛŒØ± Ú©Ù„ÛŒÚ© Ú©Ù†ÛŒØ¯.",
+            reply_markup=get_back_keyboard("games_menu")
+        )
+        await answer_callback(callback_id)
+        
+    # ---------------- Ù¾Ù†Ù„ Ù…Ø¯ÛŒØ±ÛŒØª ----------------
+    elif data == "admin_panel":
+        settings = await get_group_settings(chat_id)
+        text = "ðŸ›¡ <b>Ù¾Ù†Ù„ Ù…Ø¯ÛŒØ±ÛŒØª Ú¯Ø±ÙˆÙ‡</b>\n\nØ¨Ø§ Ú©Ù„ÛŒÚ© Ø±ÙˆÛŒ Ù‡Ø± Ø¯Ú©Ù…Ù‡ØŒ Ø¢Ù† Ù‚Ø§Ø¨Ù„ÛŒØª Ø±Ø§ Ø±ÙˆØ´Ù† ÛŒØ§ Ø®Ø§Ù…ÙˆØ´ Ú©Ù†:"
+        await edit_message_text(chat_id, message_id, text, reply_markup=get_admin_panel_keyboard(settings))
+        await answer_callback(callback_id)
+
+    elif data.startswith("toggle_"):
+        setting_key = data.split("_")[1]
+        
+        if not await is_group_admin(chat_id, user_id):
+            await answer_callback(callback_id, text="â›” Ø´Ù…Ø§ Ø§Ø¯Ù…ÛŒÙ† Ú¯Ø±ÙˆÙ‡ Ù†ÛŒØ³ØªÛŒØ¯!", show_alert=True)
+            return
+            
+        await toggle_setting(chat_id, setting_key)
+        settings = await get_group_settings(chat_id)
+        
+        text = "ðŸ›¡ <b>Ù¾Ù†Ù„ Ù…Ø¯ÛŒØ±ÛŒØª Ú¯Ø±ÙˆÙ‡</b>\n\nØ¨Ø§ Ú©Ù„ÛŒÚ© Ø±ÙˆÛŒ Ù‡Ø± Ø¯Ú©Ù…Ù‡ØŒ Ø¢Ù† Ù‚Ø§Ø¨Ù„ÛŒØª Ø±Ø§ Ø±ÙˆØ´Ù† ÛŒØ§ Ø®Ø§Ù…ÙˆØ´ Ú©Ù†ÛŒØ¯:"
+        await edit_message_text(chat_id, message_id, text, reply_markup=get_admin_panel_keyboard(settings))
+        await answer_callback(callback_id, text="âœ… ØªÙ†Ø¸ÛŒÙ…Ø§Øª Ø¨Ø§ Ù…ÙˆÙÙ‚ÛŒØª Ø°Ø®ÛŒØ±Ù‡ Ø´Ø¯!")
+        
+    # ---------------- Ø¨Ø§Ø²ÛŒ Ø³Ù†Ú¯ Ú©Ø§ØºØ° Ù‚ÛŒÚ†ÛŒ ----------------
+    elif data.startswith("rps_"):
+        user_choice = data.split("_")[1]
+        bot_choice = random.choice(["rock", "paper", "scissors"])
+        choices = {"rock": "ðŸª¨ Ø³Ù†Ú¯", "paper": "ðŸ“„ Ú©Ø§ØºØ°", "scissors": "âœ‚ï¸ Ù‚ÛŒÚ†ÛŒ"}
+        
+        if user_choice == bot_choice:
+            result_text = "ðŸ¤ <b>Ù…Ø³Ø§ÙˆÛŒ Ø´Ø¯ÛŒÙ…!</b>"
+        elif (user_choice == "rock" and bot_choice == "scissors") or \
+             (user_choice == "paper" and bot_choice == "rock") or \
+             (user_choice == "scissors" and bot_choice == "paper"):
+            result_text = "ðŸŽ‰ <b>Ø´Ù…Ø§ Ø¨Ø±Ù†Ø¯Ù‡ Ø´Ø¯ÛŒØ¯! (+20 XP)</b>"
+            await add_xp(user_id, chat_id, 20)
+        else:
+            result_text = "ðŸ˜¢ <b>Ù…Ù† Ø¨Ø±Ù†Ø¯Ù‡ Ø´Ø¯Ù…!</b>"
+            
+        response = (
+            f"Ø´Ù…Ø§: {choices[user_choice]}\n"
+            f"Ù…Ù†: {choices[bot_choice]}\n\n"
+            f"{result_text}"
+        )
+        await edit_message_text(chat_id, message_id, response, reply_markup=get_rps_keyboard())
+        await answer_callback(callback_id, text="âœ… Ø§Ù†ØªØ®Ø§Ø¨ Ø´Ù…Ø§ Ø«Ø¨Øª Ø´Ø¯!")
+
+    # ---------------- Ø±Ø£ÛŒâ€ŒÚ¯ÛŒØ±ÛŒ (Vote) ----------------
+    elif data in ["vote_yes", "vote_no"]:
+        choice = "yes" if data == "vote_yes" else "no"
+        result = await process_vote(chat_id, message_id, user_id, choice)
+        
+        if result == "voted":
+            await answer_callback(callback_id, text="â›” Ø´Ù…Ø§ Ù‚Ø¨Ù„Ø§Ù‹ Ø±Ø£ÛŒ Ø¯Ø§Ø¯Ù‡â€ŒØ§ÛŒØ¯!", show_alert=True)
+        elif result == "expired":
+            await answer_callback(callback_id, text="â³ Ø²Ù…Ø§Ù† Ø§ÛŒÙ† Ø±Ø£ÛŒâ€ŒÚ¯ÛŒØ±ÛŒ Ø¨Ù‡ Ù¾Ø§ÛŒØ§Ù† Ø±Ø³ÛŒØ¯Ù‡ Ø§Ø³Øª.", show_alert=True)
+        else:
+            await answer_callback(callback_id, text="âœ… Ø±Ø£ÛŒ Ø´Ù…Ø§ Ø«Ø¨Øª Ø´Ø¯!")
+
+    # ---------------- Ù…Ø³Ø§Ø¨Ù‚Ù‡ Ø¹Ù…ÙˆÙ…ÛŒ (Trivia) ----------------
+    elif data.startswith("trivia_"):
+        if data == "trivia_end":
+            if message_id in active_trivias:
+                del active_trivias[message_id]
+                await edit_message_text(
+                    chat_id, message_id,
+                    "ðŸ§  <b>Ù…Ø³Ø§Ø¨Ù‚Ù‡ Ù¾Ø§ÛŒØ§Ù† ÛŒØ§ÙØª</b>\n\nÙ…Ø³Ø§Ø¨Ù‚Ù‡ Ø¨Ø¯ÙˆÙ† Ø¨Ø±Ù†Ø¯Ù‡ Ù„ØºÙˆ Ø´Ø¯."
+                )
+            await answer_callback(callback_id)
+            return
+            
+        if message_id not in active_trivias:
+            await answer_callback(callback_id, text="â³ Ø²Ù…Ø§Ù† Ø§ÛŒÙ† Ø³ÙˆØ§Ù„ Ø¨Ù‡ Ù¾Ø§ÛŒØ§Ù† Ø±Ø³ÛŒØ¯Ù‡ Ø§Ø³Øª!", show_alert=True)
+            return
+            
+        game = active_trivias[message_id]
+        
+        if user_id in game["answered_by"]:
+            await answer_callback(callback_id, text="â›” Ø´Ù…Ø§ Ù‚Ø¨Ù„Ø§Ù‹ Ø¬ÙˆØ§Ø¨ Ø¯Ø§Ø¯Ù‡â€ŒØ§ÛŒØ¯!", show_alert=True)
+            return
+            
+        game["answered_by"].append(user_id)
+        user_choice = int(data.split("_")[1])
+        
+        if user_choice == game["answer"]:
+            del active_trivias[message_id]
+            await add_xp(user_id, chat_id, 50)
+            await edit_message_text(
+                chat_id, message_id,
+                f"ðŸ§  <b>Ù…Ø³Ø§Ø¨Ù‚Ù‡ Ø¹Ù…ÙˆÙ…ÛŒ</b>\n\nðŸ† Ø¨Ø±Ù†Ø¯Ù‡: <b>{first_name}</b>!\n+50 XP Ø¨Ù‡ Ø´Ù…Ø§ Ø§Ø¶Ø§ÙÙ‡ Ø´Ø¯.\n\nâœ… Ù…Ø³Ø§Ø¨Ù‚Ù‡ ØªÙˆØ³Ø· Ø¨Ø±Ù†Ø¯Ù‡ Ø¨Ø³ØªÙ‡ Ø´Ø¯."
+            )
+            await answer_callback(callback_id, text="ðŸŽ‰ Ø¯Ø±Ø³Øª Ø¨ÙˆØ¯! ÛµÛ° Ø§Ù…ØªÛŒØ§Ø² Ú¯Ø±ÙØªÛŒ!", show_alert=True)
+        else:
+            await answer_callback(callback_id, text="âŒ Ø¬ÙˆØ§Ø¨ Ø§Ø´ØªØ¨Ø§Ù‡ Ø¨ÙˆØ¯!", show_alert=True)
+
+
+===== handlers\economy.py =====
+
+# handlers/economy.py
+import random
+from core.api_client import send_message
+from services.economy_service import get_balance, add_coins, claim_daily
+
+async def handle_balance(chat_id, user_id, first_name):
+    balance = await get_balance(user_id, chat_id)
+    text = (
+        f"ðŸ’° <b>Ù…ÙˆØ¬ÙˆØ¯ÛŒ Ø´Ù…Ø§</b>\n\n"
+        f"ðŸ‘¤ Ù†Ø§Ù…: <b>{first_name}</b>\n"
+        f"ðŸ’µ Ø³Ú©Ù‡: <b>{balance}</b>\n\n"
+        f"Ø¨Ø±Ø§ÛŒ Ø¯Ø±ÛŒØ§ÙØª Ø³Ú©Ù‡ Ø±Ø§ÛŒÚ¯Ø§Ù†ØŒ Ø¯Ø³ØªÙˆØ± /daily Ø±Ø§ Ø¨Ø²Ù†ÛŒØ¯!"
+    )
+    await send_message(chat_id, text)
+
+async def handle_daily(chat_id, user_id, first_name):
+    success, data, streak = await claim_daily(user_id, chat_id)
+    if success:
+        reward = data
+        text = (
+            f"ðŸŽ <b>Ù¾Ø§Ø¯Ø§Ø´ Ø±ÙˆØ²Ø§Ù†Ù‡!</b>\n\n"
+            f"ðŸŽ‰ {first_name} Ø¹Ø²ÛŒØ²ØŒ Ø´Ù…Ø§ <b>{reward} Ø³Ú©Ù‡</b> Ø¯Ø±ÛŒØ§ÙØª Ú©Ø±Ø¯ÛŒØ¯! ðŸ’µ\n"
+            f"ðŸ”¥ Ø§Ø³ØªØ±ÛŒÚ© Ø´Ù…Ø§: <b>{streak} Ø±ÙˆØ²</b>\n\n"
+            f"ðŸ’¡ Ù‡Ø± Ø±ÙˆØ² Ø¨Ø±Ú¯Ø±Ø¯ÛŒØ¯ ØªØ§ Ø§Ø³ØªØ±ÛŒÚ©ØªØ§Ù† Ø¨ÛŒØ´ØªØ± Ø´ÙˆØ¯ Ùˆ Ø³Ú©Ù‡â€ŒÙ‡Ø§ÛŒ Ø¨ÛŒØ´ØªØ±ÛŒ Ø¨Ú¯ÛŒØ±ÛŒØ¯!"
+        )
+    else:
+        remaining_seconds = data
+        hours = remaining_seconds // 3600
+        minutes = (remaining_seconds % 3600) // 60
+        text = f"â³ <b>Ø´Ù…Ø§ Ø§Ù…Ø±ÙˆØ² Ù¾Ø§Ø¯Ø§Ø´ Ø®ÙˆØ¯ Ø±Ø§ Ú¯Ø±ÙØªÙ‡â€ŒØ§ÛŒØ¯!</b>\n\nØ²Ù…Ø§Ù† Ø¨Ø§Ù‚ÛŒâ€ŒÙ…Ø§Ù†Ø¯Ù‡ Ø¨Ø±Ø§ÛŒ Ù¾Ø§Ø¯Ø§Ø´ Ø¨Ø¹Ø¯ÛŒ: <b>{hours} Ø³Ø§Ø¹Øª Ùˆ {minutes} Ø¯Ù‚ÛŒÙ‚Ù‡</b>"
+    await send_message(chat_id, text)
+
+async def handle_coinflip(chat_id, text, user_id, first_name):
+    """Ø¨Ø§Ø²ÛŒ Ø´ÛŒØ± ÛŒØ§ Ø®Ø· Ø¨Ø±Ø§ÛŒ Ø´Ø±Ø·â€ŒØ¨Ù†Ø¯ÛŒ Ø³Ú©Ù‡"""
+    parts = text.split()
+    if len(parts) < 3 or parts[1].lower() not in ["Ø´ÛŒØ±", "Ø®Ø·"]:
+        await send_message(chat_id, "âŒ Ø§Ø³ØªÙØ§Ø¯Ù‡ Ø¯Ø±Ø³Øª: /coinflip [Ø´ÛŒØ±/Ø®Ø·] [Ù…Ø¨Ù„Øº]\nÙ…Ø«Ø§Ù„: /coinflip Ø´ÛŒØ± 50")
+        return
+        
+    try:
+        bet = int(parts[2])
+    except ValueError:
+        await send_message(chat_id, "âŒ Ù…Ø¨Ù„Øº Ø¨Ø§ÛŒØ¯ ÛŒÚ© Ø¹Ø¯Ø¯ ØµØ­ÛŒØ­ Ø¨Ø§Ø´Ø¯.")
+        return
+        
+    if bet <= 0:
+        await send_message(chat_id, "âŒ Ù…Ø¨Ù„Øº Ø´Ø±Ø· Ø¨Ø§ÛŒØ¯ Ø¨Ø²Ø±Ú¯ØªØ± Ø§Ø² ØµÙØ± Ø¨Ø§Ø´Ø¯.")
+        return
+        
+    balance = await get_balance(user_id, chat_id)
+    if balance < bet:
+        await send_message(chat_id, f"âŒ Ù…ÙˆØ¬ÙˆØ¯ÛŒ Ø´Ù…Ø§ Ú©Ø§ÙÛŒ Ù†ÛŒØ³Øª.\nÙ…ÙˆØ¬ÙˆØ¯ÛŒ ÙØ¹Ù„ÛŒ: {balance} Ø³Ú©Ù‡")
+        return
+        
+    user_choice = parts[1].lower()
+    # 0 = Ø´ÛŒØ± (Heads), 1 = Ø®Ø· (Tails)
+    result_num = random.randint(0, 1)
+    result_text = "Ø´ÛŒØ±" if result_num == 0 else "Ø®Ø·"
+    
+    if user_choice == result_text:
+        await add_coins(user_id, chat_id, bet)
+        text = f"ðŸª™ <b>Ø´ÛŒØ± ÛŒØ§ Ø®Ø·!</b>\n\n Ø§Ù†ØªØ®Ø§Ø¨ Ø´Ù…Ø§: {user_choice}\n Ù†ØªÛŒØ¬Ù‡: {result_text}\n\nðŸŽ‰ Ø¢ÙØ±ÛŒÙ†! Ø´Ù…Ø§ <b>{bet} Ø³Ú©Ù‡</b> Ø¨Ø±Ø¯ÛŒØ¯!"
+    else:
+        await add_coins(user_id, chat_id, -bet)
+        text = f"ðŸª™ <b>Ø´ÛŒØ± ÛŒØ§ Ø®Ø·!</b>\n\n Ø§Ù†ØªØ®Ø§Ø¨ Ø´Ù…Ø§: {user_choice}\n Ù†ØªÛŒØ¬Ù‡: {result_text}\n\nðŸ˜¢ Ù…ØªØ£Ø³ÙÙ…! Ø´Ù…Ø§ <b>{bet} Ø³Ú©Ù‡</b> Ø¨Ø§Ø®ØªÛŒØ¯."
+        
+    await send_message(chat_id, text)
+
+from services.economy_service import do_work, do_rob, transfer_coins, buy_item, SHOP_ITEMS
+
+async def handle_work(chat_id, user_id, first_name):
+    success, data = await do_work(user_id, chat_id)
+    if success:
+        await send_message(chat_id, f"ðŸ’¼ <b>{first_name}</b> Ú©Ø§Ø± Ú©Ø±Ø¯ÛŒ Ùˆ <b>{data} Ø³Ú©Ù‡</b> Ú¯Ø±ÙØªÛŒ! ðŸ’µ")
+    else:
+        mins = data // 60
+        await send_message(chat_id, f"â³ Ø´Ù…Ø§ Ø®Ø³ØªÙ‡ Ù‡Ø³ØªÛŒØ¯! {mins} Ø¯Ù‚ÛŒÙ‚Ù‡ Ø¯ÛŒÚ¯Ù‡ Ù…ÛŒâ€ŒØªÙˆÙ†ÛŒ Ø¯ÙˆØ¨Ø§Ø±Ù‡ Ú©Ø§Ø± Ú©Ù†ÛŒ.")
+
+async def handle_rob(chat_id, message, user_id, first_name):
+    if not message.get("reply_to_message"):
+        await send_message(chat_id, "âŒ Ø¨Ø±Ø§ÛŒ Ø¯Ø²Ø¯ÛŒ Ø¨Ø§ÛŒØ¯ Ø±ÙˆÛŒ Ù¾ÛŒØ§Ù… ÛŒÚ© Ù†ÙØ± Ø±ÛŒÙ¾Ù„Ø§ÛŒ Ú©Ù†ÛŒ: /rob")
+        return
+        
+    target = message["reply_to_message"]["from"]
+    if target["id"] == user_id:
+        await send_message(chat_id, "âŒ Ù†Ù…ÛŒâ€ŒØªÙˆÙ†ÛŒ Ø§Ø² Ø®ÙˆØ¯Øª Ø¨Ø¯Ø²Ø¯ÛŒ!")
+        return
+        
+    status, data = await do_rob(user_id, chat_id, target["id"])
+    if status == "cooldown":
+        hours = data // 3600
+        mins = (data % 3600) // 60
+        await send_message(chat_id, f"â³ Ù¾Ù„ÛŒØ³â€ŒÙ‡Ø§ Ù‡Ù†ÙˆØ² ØªÙˆ Ø±Ùˆ Ù…ÛŒâ€ŒÚ¯Ø±Ø¯Ù†! {hours} Ø³Ø§Ø¹Øª Ùˆ {mins} Ø¯Ù‚ÛŒÙ‚Ù‡ Ø¯ÛŒÚ¯Ù‡ Ø§Ù…ØªØ­Ø§Ù† Ú©Ù†.")
+    elif status == "poor_target":
+        await send_message(chat_id, "ðŸ¤· Ø§ÛŒÙ† Ú©Ø§Ø±Ø¨Ø± Ø§Ù†Ù‚Ø¯Ø± ÙÙ‚ÛŒØ±Ù‡ Ú©Ù‡ Ø§Ø±Ø²Ø´ Ø¯Ø²Ø¯ÛŒ Ù†Ø¯Ø§Ø±Ù‡!")
+    elif status == "success":
+        await send_message(chat_id, f"ðŸ¦¹ <b>{first_name}</b> Ø§Ø² {target.get('first_name', 'Ú©Ø§Ø±Ø¨Ø±')} <b>{data} Ø³Ú©Ù‡</b> Ø¯Ø²Ø¯ÛŒØ¯! ðŸ¤‘")
+    elif status == "failed":
+        await send_message(chat_id, f"ðŸš¨ <b>{first_name}</b> ØªÙˆ Ø¯Ø²Ø¯ÛŒ Ø´Ú©Ø³Øª Ø®ÙˆØ±Ø¯ÛŒ Ùˆ <b>{data} Ø³Ú©Ù‡</b> Ø¬Ø±ÛŒÙ…Ù‡ Ø´Ø¯ÛŒ! ðŸ‘®")
+
+async def handle_give(chat_id, message, text, user_id, first_name):
+    parts = text.split()
+    if len(parts) < 2 or not message.get("reply_to_message"):
+        await send_message(chat_id, "âŒ Ø§Ø³ØªÙØ§Ø¯Ù‡: Ø±ÙˆÛŒ Ù¾ÛŒØ§Ù… Ú©Ø§Ø±Ø¨Ø± Ø±ÛŒÙ¾Ù„Ø§ÛŒ Ú©Ù† Ùˆ Ø¨Ù†ÙˆÛŒØ³ /give [Ù…Ø¨Ù„Øº]")
+        return
+        
+    try:
+        amount = int(parts[1])
+    except ValueError:
+        await send_message(chat_id, "âŒ Ù…Ø¨Ù„Øº Ø¨Ø§ÛŒØ¯ Ø¹Ø¯Ø¯ Ø¨Ø§Ø´Ø¯.")
+        return
+        
+    if amount <= 0:
+        await send_message(chat_id, "âŒ Ù…Ø¨Ù„Øº Ø¨Ø§ÛŒØ¯ Ø¨Ø²Ø±Ú¯ØªØ± Ø§Ø² ØµÙØ± Ø¨Ø§Ø´Ø¯.")
+        return
+        
+    target = message["reply_to_message"]["from"]
+    success = await transfer_coins(user_id, chat_id, target["id"], amount)
+    if success:
+        await send_message(chat_id, f"ðŸ’¸ <b>{first_name}</b> Ø¨Ù‡ {target.get('first_name', 'Ú©Ø§Ø±Ø¨Ø±')} <b>{amount} Ø³Ú©Ù‡</b> Ù‡Ø¯ÛŒÙ‡ Ø¯Ø§Ø¯! â¤ï¸")
+    else:
+        await send_message(chat_id, "âŒ Ù…ÙˆØ¬ÙˆØ¯ÛŒ Ø´Ù…Ø§ Ú©Ø§ÙÛŒ Ù†ÛŒØ³Øª.")
+
+async def handle_shop(chat_id):
+    text = "ðŸ›’ <b>ÙØ±ÙˆØ´Ú¯Ø§Ù‡ Ø±ÙÛŒØ¨Ø§Øª</b>\n\nØ¨Ø±Ø§ÛŒ Ø®Ø±ÛŒØ¯ØŒ Ø¯Ø³ØªÙˆØ± /buy [Ø¢ÛŒØ¯ÛŒ Ø¢ÛŒØªÙ…] Ø±Ø§ Ø¨Ø²Ù†ÛŒØ¯:\n\n"
+    for item_id, info in SHOP_ITEMS.items():
+        text += f"ðŸ†” <code>{item_id}</code>\nðŸ“¦ {info['name']}\nðŸ’° Ù‚ÛŒÙ…Øª: {info['price']} Ø³Ú©Ù‡\nâž–âž–âž–âž–âž–âž–\n"
+    await send_message(chat_id, text)
+
+async def handle_buy(chat_id, text, user_id, first_name):
+    parts = text.split()
+    if len(parts) < 2:
+        await send_message(chat_id, "âŒ Ø§Ø³ØªÙØ§Ø¯Ù‡: /buy [Ø¢ÛŒØ¯ÛŒ Ø¢ÛŒØªÙ…]\nÙ…Ø«Ø§Ù„: /buy vip_badge")
+        return
+    item_id = parts[1]
+    success, msg = await buy_item(user_id, chat_id, item_id)
+    if success:
+        await send_message(chat_id, f"ðŸŽ‰ <b>{first_name}</b>ØŒ Ø´Ù…Ø§ Ø¨Ø§ Ù…ÙˆÙÙ‚ÛŒØª <b>{msg}</b> Ø±Ø§ Ø®Ø±ÛŒØ¯ÛŒØ¯! Ø¨Ù‡ Ø§ÛŒÙ†ÙˆÙ†ØªÙˆØ±ÛŒ Ø´Ù…Ø§ Ø§Ø¶Ø§ÙÙ‡ Ø´Ø¯.")
+    else:
+        await send_message(chat_id, f"âŒ Ø®Ø·Ø§ Ø¯Ø± Ø®Ø±ÛŒØ¯: {msg}")
+
+
+===== handlers\fun.py =====
+
+# handlers/fun.py
+import random
+import time
+from core.api_client import send_message, edit_message_text
+
+_active_users = {}
+active_votes = {}
+VOTE_TTL_SECONDS = 30 * 60
+
+def _prune_expired_votes():
+    now = time.time()
+    expired_ids = [
+        msg_id for msg_id, data in active_votes.items()
+        if now - data.get("created_at", now) > VOTE_TTL_SECONDS
+    ]
+    for msg_id in expired_ids:
+        del active_votes[msg_id]
+
+async def track_user(chat_id, user_id, first_name):
+    if chat_id not in _active_users:
+        _active_users[chat_id] = {}
+    _active_users[chat_id][user_id] = first_name
+
+async def handle_who(chat_id):
+    users = _active_users.get(chat_id, {})
+    if not users:
+        await send_message(
+            chat_id, 
+            "ðŸ¤” Ù‡Ù†ÙˆØ² Ú©Ø³ÛŒ Ø¯Ø± Ú¯Ø±ÙˆÙ‡ Ù¾ÛŒØ§Ù…ÛŒ Ù†Ø¯Ø§Ø¯Ù‡ Ø§Ø³Øª Ú©Ù‡ Ø¨ØªÙˆÙ†Ù… Ø§Ù†ØªØ®Ø§Ø¨Ø´ Ú©Ù†Ù…!\n"
+            "Ø§ÙˆÙ„ÛŒÙ† Ù†ÙØ± Ø¨Ø§Ø´ Ùˆ ÛŒÙ‡ Ù¾ÛŒØ§Ù… Ø¨ÙØ±Ø³Øª! ðŸ’¬"
+        )
+        return
+        
+    selected_id = random.choice(list(users.keys()))
+    selected_name = users[selected_id]
+    
+    text = f"ðŸŽ¯ <b>Ø§Ù†ØªØ®Ø§Ø¨ ØªØµØ§Ø¯ÙÛŒ!</b>\n\nÙ†ÙØ± Ø§Ù†ØªØ®Ø§Ø¨ Ø´Ø¯Ù‡ Ø¨Ø±Ø§ÛŒ Ø§ÛŒÙ† Ú©Ø§Ø±: <b>{selected_name}</b> ðŸŽ‰"
+    await send_message(chat_id, text)
+
+async def handle_vote(chat_id, text, user_id, first_name):
+    parts = text.split(" ", 1)
+    if len(parts) < 2:
+        await send_message(chat_id, "âŒ Ø§Ø³ØªÙØ§Ø¯Ù‡ Ø¯Ø±Ø³Øª: /vote [Ù…ÙˆØ¶ÙˆØ¹ Ø±Ø£ÛŒâ€ŒÚ¯ÛŒØ±ÛŒ]")
+        return
+        
+    subject = parts[1]
+    keyboard = {
+        "inline_keyboard": [
+            [
+                {"text": "âœ… Ù…ÙˆØ§ÙÙ‚Ù…", "callback_data": "vote_yes"},
+                {"text": "âŒ Ù…Ø®Ø§Ù„ÙÙ…", "callback_data": "vote_no"}
+            ]
+        ]
+    }
+    
+    text = (
+        f"ðŸ“Š <b>Ø±Ø£ÛŒâ€ŒÚ¯ÛŒØ±ÛŒ Ø¬Ø¯ÛŒØ¯</b>\n\n"
+        f"Ø³ÙˆØ§Ù„: <b>{subject}</b>\n\n"
+        f"ðŸ‘¤ Ø§ÛŒØ¬Ø§Ø¯ Ø´Ø¯Ù‡ ØªÙˆØ³Ø·: {first_name}\n\n"
+        f"Ù…ÙˆØ§ÙÙ‚ÛŒÙ†: 0 | Ù…Ø®Ø§Ù„ÙÛŒÙ†: 0"
+    )
+    res = await send_message(chat_id, text, reply_markup=keyboard)
+    
+    if res and res.get("ok"):
+        _prune_expired_votes()
+        msg_id = res["result"]["message_id"]
+        active_votes[msg_id] = {
+            "chat_id": chat_id,
+            "subject": subject,
+            "creator": first_name,
+            "yes": 0,
+            "no": 0,
+            "voters": [],
+            "created_at": time.time()
+        }
+
+async def process_vote(chat_id, message_id, user_id, vote_choice):
+    if message_id not in active_votes:
+        return "expired"
+        
+    vote_data = active_votes[message_id]
+    
+    if user_id in vote_data["voters"]:
+        return "voted"
+        
+    vote_data["voters"].append(user_id)
+    if vote_choice == "yes":
+        vote_data["yes"] += 1
+    else:
+        vote_data["no"] += 1
+        
+    new_text = (
+        f"ðŸ“Š <b>Ø±Ø£ÛŒâ€ŒÚ¯ÛŒØ±ÛŒ Ø¬Ø¯ÛŒØ¯</b>\n\n"
+        f"Ø³ÙˆØ§Ù„: <b>{vote_data['subject']}</b>\n\n"
+        f"ðŸ‘¤ Ø§ÛŒØ¬Ø§Ø¯ Ø´Ø¯Ù‡ ØªÙˆØ³Ø·: {vote_data['creator']}\n\n"
+        f"Ù…ÙˆØ§ÙÙ‚ÛŒÙ†: {vote_data['yes']} | Ù…Ø®Ø§Ù„ÙÛŒÙ†: {vote_data['no']}"
+    )
+    
+    keyboard = {
+        "inline_keyboard": [
+            [
+                {"text": "âœ… Ù…ÙˆØ§ÙÙ‚Ù…", "callback_data": "vote_yes"},
+                {"text": "âŒ Ù…Ø®Ø§Ù„ÙÙ…", "callback_data": "vote_no"}
+            ]
+        ]
+    }
+    await edit_message_text(chat_id, message_id, new_text, reply_markup=keyboard)
+    return "success"
+
+async def end_vote(chat_id):
+    """Ù¾Ø§ÛŒØ§Ù† Ø¯Ø§Ø¯Ù† Ø¨Ù‡ Ù†Ø¸Ø±Ø³Ù†Ø¬ÛŒ ÙØ¹Ø§Ù„ Ø¯Ø± Ú¯Ø±ÙˆÙ‡"""
+    ended = False
+    for msg_id, vote_data in list(active_votes.items()):
+        if vote_data["chat_id"] == chat_id:
+            # Ù†Ù…Ø§ÛŒØ´ Ù†ØªÛŒØ¬Ù‡ Ù†Ù‡Ø§ÛŒÛŒ
+            result_text = (
+                f"ðŸ“Š <b>Ù†ØªÛŒØ¬Ù‡ Ù†Ù‡Ø§ÛŒÛŒ Ø±Ø£ÛŒâ€ŒÚ¯ÛŒØ±ÛŒ</b>\n\n"
+                f"Ø³ÙˆØ§Ù„: <b>{vote_data['subject']}</b>\n\n"
+                f"âœ… Ù…ÙˆØ§ÙÙ‚ÛŒÙ†: {vote_data['yes']}\n"
+                f"âŒ Ù…Ø®Ø§Ù„ÙÛŒÙ†: {vote_data['no']}\n\n"
+                f"ðŸ Ø§ÛŒÙ† Ø±Ø£ÛŒâ€ŒÚ¯ÛŒØ±ÛŒ Ø¨Ù‡ Ù¾Ø§ÛŒØ§Ù† Ø±Ø³ÛŒØ¯."
+            )
+            await send_message(chat_id, result_text)
+            del active_votes[msg_id]
+            ended = True
+            
+    return ended
+
+# Ù„ÛŒØ³Øª Truth Ùˆ Dare
+TRUTHS = [
+    "Ø¨Ø²Ø±Ú¯ØªØ±ÛŒÙ† Ø¯Ø±ÙˆØº Ø²Ù†Ø¯Ú¯ÛŒØª Ú†Ù‡ Ø¨ÙˆØ¯Ù‡ØŸ",
+    "Ú©ÛŒ Ø±Ùˆ ØªÙˆ Ú¯Ø±ÙˆÙ‡ Ø¯ÙˆØ³Øª Ø¯Ø§Ø±ÛŒ ÙˆÙ„ÛŒ Ø¬Ø±Ø£Øª Ù†Ù…ÛŒâ€ŒÚ©Ù†ÛŒ Ø¨Ú¯ÛŒØŸ",
+    "Ø¨Ø¯ØªØ±ÛŒÙ† Ø®Ø§Ø·Ø±Ù‡ Ù…Ø¯Ø±Ø³Ù‡â€ŒØ§Øª Ú†ÛŒÙ‡ØŸ",
+    "Ø§Ú¯Ù‡ Ø§Ù„Ø¢Ù† ÛŒÚ© Ø³ÙˆÙ¾Ø±Ù¾Ø§ÙˆØ± Ø¯Ø§Ø´ØªÛŒ Ú†ÛŒ Ù…ÛŒâ€ŒØ´Ø¯ØŸ",
+    "ØªØ§ Ø­Ø§Ù„Ø§ Ø¹Ø§Ø´Ù‚ Ø´Ø¯ÛŒØŸ"
+]
+
+DARES = [
+    "ÛŒÚ© Ø¹Ú©Ø³ Ø§Ø² Ú†Ù‡Ø±Ù‡â€ŒØª Ø¨ÙØ±Ø³Øª!",
+    "Ù‡Ù…ÛŒÙ† Ø§Ù„Ø¢Ù† ÛŒÚ© Ù¾ÛŒØ§Ù… Ø¹Ø§Ø´Ù‚Ø§Ù†Ù‡ ØªÙˆ Ú¯Ø±ÙˆÙ‡ Ø¨ÙØ±Ø³Øª!",
+    "Ø§Ø³Ù… Ø®ÙˆØ¯Øª Ø±Ùˆ Ø¨Ø±Ø¹Ú©Ø³ ØªØ§ÛŒÙ¾ Ú©Ù†!",
+    "ÛŒÚ© Ø¢Ù‡Ù†Ú¯ Ø¨Ø®ÙˆØ§Ù† Ùˆ ÙˆÛŒØ³Ø´ Ú©Ù†!",
+    "Û±Û° ØªØ§ Ø§ÛŒÙ…ÙˆØ¬ÛŒ ØªØµØ§Ø¯ÙÛŒ Ø¨ÙØ±Ø³Øª!"
+]
+
+async def handle_truth(chat_id):
+    truth = random.choice(TRUTHS)
+    text = f"ðŸ¤” <b>Ø¬Ø±Ø¦Øª ÛŒØ§ Ø­Ù‚ÛŒÙ‚ØªØŸ</b>\n\nðŸ§  Ø­Ù‚ÛŒÙ‚Øª:\n<b>{truth}</b>"
+    await send_message(chat_id, text)
+
+async def handle_dare(chat_id):
+    dare = random.choice(DARES)
+    text = f"ðŸ¤” <b>Ø¬Ø±Ø¦Øª ÛŒØ§ Ø­Ù‚ÛŒÙ‚ØªØŸ</b>\n\nðŸ”¥ Ø¬Ø±Ø¦Øª:\n<b>{dare}</b>"
+    await send_message(chat_id, text)
+
+
+===== handlers\games.py =====
+
+# handlers/games.py
+import random
+import time
+from core.api_client import send_message, edit_message_text
+from services.ai_service import generate_trivia_question
+
+active_trivias = {}
+TRIVIA_TTL_SECONDS = 10 * 60
+
+# Ø³ÙˆØ§Ù„Ø§Øª Ù¾ÛŒØ´â€ŒÙØ±Ø¶ Ø¨Ø±Ø§ÛŒ Ø²Ù…Ø§Ù†ÛŒ Ú©Ù‡ Ù‡ÙˆØ´ Ù…ØµÙ†ÙˆØ¹ÛŒ Ù‚Ø·Ø¹ Ø¨Ø§Ø´Ù‡ ÛŒØ§ Ø§Ø±ÙˆØ± Ø¨Ø¯Ù‡
+FALLBACK_QUESTIONS = [
+    {"q": "Ù¾Ø§ÛŒØªØ®Øª Ø§ÛŒØ±Ø§Ù† Ú©Ø¬Ø§Ø³ØªØŸ", "options": ["ØªÙ‡Ø±Ø§Ù†", "Ø´ÛŒØ±Ø§Ø²", "Ø§ØµÙÙ‡Ø§Ù†", "Ù…Ø´Ù‡Ø¯"], "answer": 0},
+    {"q": "Ø¨Ø²Ø±Ú¯ØªØ±ÛŒÙ† Ø³ÛŒØ§Ø±Ù‡ Ù…Ù†Ø¸ÙˆÙ…Ù‡ Ø´Ù…Ø³ÛŒ Ú©Ø¯Ø§Ù… Ø§Ø³ØªØŸ", "options": ["Ø²Ù…ÛŒÙ†", "Ù…Ø±ÛŒØ®", "Ù…Ø´ØªØ±ÛŒ", "Ø²Ù‡Ø±Ù‡"], "answer": 2},
+    {"q": "Ù†ÙˆÛŒØ³Ù†Ø¯Ù‡ Ú©ØªØ§Ø¨ Ø´Ø§Ù‡Ù†Ø§Ù…Ù‡ Ú©ÛŒØ³ØªØŸ", "options": ["Ø³Ø¹Ø¯ÛŒ", "ÙØ±Ø¯ÙˆØ³ÛŒ", "Ø­Ø§ÙØ¸", "Ù…ÙˆÙ„ÙˆÛŒ"], "answer": 1}
+]
+
+def _prune_expired_trivias():
+    now = time.time()
+    expired_ids = [
+        msg_id for msg_id, data in active_trivias.items()
+        if now - data.get("created_at", now) > TRIVIA_TTL_SECONDS
+    ]
+    for msg_id in expired_ids:
+        del active_trivias[msg_id]
+
+async def handle_trivia(chat_id):
+    """Ø´Ø±ÙˆØ¹ ÛŒÚ© Ù…Ø³Ø§Ø¨Ù‚Ù‡ Ø¹Ù…ÙˆÙ…ÛŒ Ø¨Ø§ Ø³ÙˆØ§Ù„ Ù‡ÙˆØ´ Ù…ØµÙ†ÙˆØ¹ÛŒ"""
+    _prune_expired_trivias()
+
+    # Ø¬Ù„ÙˆÚ¯ÛŒØ±ÛŒ Ø§Ø² Ø´Ø±ÙˆØ¹ Ø¯Ùˆ Ù…Ø³Ø§Ø¨Ù‚Ù‡ Ù‡Ù…Ø²Ù…Ø§Ù†
+    if any(data["chat_id"] == chat_id for data in active_trivias.values()):
+        await send_message(chat_id, "â³ ÛŒÚ© Ù…Ø³Ø§Ø¨Ù‚Ù‡ Ø¯Ø± Ø­Ø§Ù„ Ø§Ù†Ø¬Ø§Ù… Ø§Ø³Øª! Ù„Ø·ÙØ§Ù‹ Ù…Ù†ØªØ¸Ø± Ø¨Ù…Ø§Ù†ÛŒØ¯.")
+        return False
+
+    # Ø§Ø±Ø³Ø§Ù„ Ù¾ÛŒØ§Ù… Ø§ÙˆÙ„ÛŒÙ‡ Ø¨Ø±Ø§ÛŒ Ø¬Ù„ÙˆÚ¯ÛŒØ±ÛŒ Ø§Ø² Ø§Ø­Ø³Ø§Ø³ Ù‡Ù†Ú¯ÛŒ Ø¨Ø§Øª
+    msg_res = await send_message(chat_id, "ðŸ§  <b>Ù…Ø³Ø§Ø¨Ù‚Ù‡ Ø¹Ù…ÙˆÙ…ÛŒ!</b>\n\nâ³ Ù‡ÙˆØ´ Ù…ØµÙ†ÙˆØ¹ÛŒ Ø¯Ø± Ø­Ø§Ù„ Ø·Ø±Ø­ Ø³ÙˆØ§Ù„ Ø§Ø³Øª...")
+    
+    # Ú¯Ø±ÙØªÙ† Ø³ÙˆØ§Ù„ Ø§Ø² Ù‡ÙˆØ´ Ù…ØµÙ†ÙˆØ¹ÛŒ
+    ai_question = await generate_trivia_question()
+    
+    # Ø§Ú¯Ù‡ Ù‡ÙˆØ´ Ù…ØµÙ†ÙˆØ¹ÛŒ Ø¬ÙˆØ§Ø¨ Ø¯Ø±Ø³Øª Ù†Ø¯Ø§Ø¯ØŒ Ø§Ø² Ø³ÙˆØ§Ù„Ø§Øª Ù¾ÛŒØ´â€ŒÙØ±Ø¶ Ø§Ø³ØªÙØ§Ø¯Ù‡ Ú©Ù†
+    if not ai_question:
+        fallback = random.choice(FALLBACK_QUESTIONS)
+        q = fallback["q"]
+        options = fallback["options"]
+        answer_idx = fallback["answer"]
+    else:
+        q = ai_question["question"]
+        options = ai_question["options"]
+        answer_idx = ai_question["answer"]
+
+    keyboard = {
+        "inline_keyboard": [
+            [
+                {"text": f"A) {options[0]}", "callback_data": "trivia_0"},
+                {"text": f"B) {options[1]}", "callback_data": "trivia_1"}
+            ],
+            [
+                {"text": f"C) {options[2]}", "callback_data": "trivia_2"},
+                {"text": f"D) {options[3]}", "callback_data": "trivia_3"}
+            ],
+            [{"text": "ðŸ”š Ù¾Ø§ÛŒØ§Ù† Ù…Ø³Ø§Ø¨Ù‚Ù‡", "callback_data": "trivia_end"}]
+        ]
+    }
+    text = f"ðŸ§  <b>Ù…Ø³Ø§Ø¨Ù‚Ù‡ Ø¹Ù…ÙˆÙ…ÛŒ!</b>\n\nâ“ {q}\n\nØ¨Ø±Ø§ÛŒ Ù¾Ø§Ø³Ø® Ø±ÙˆÛŒ ÛŒÚ© Ú¯Ø²ÛŒÙ†Ù‡ Ú©Ù„ÛŒÚ© Ú©Ù†ÛŒØ¯:"
+    
+    # ÙˆÛŒØ±Ø§ÛŒØ´ Ù¾ÛŒØ§Ù… Ø§ÙˆÙ„ÛŒÙ‡ Ùˆ Ù‚Ø±Ø§Ø± Ø¯Ø§Ø¯Ù† Ø³ÙˆØ§Ù„ Ùˆ Ø¯Ú©Ù…Ù‡â€ŒÙ‡Ø§
+    if msg_res and msg_res.get("ok"):
+        msg_id = msg_res["result"]["message_id"]
+        await edit_message_text(chat_id, msg_id, text, reply_markup=keyboard)
+        
+        active_trivias[msg_id] = {
+            "chat_id": chat_id,
+            "answer": answer_idx,
+            "answered_by": [],
+            "created_at": time.time()
+        }
+        return True
+    return False
+
+async def handle_rps(chat_id):
+    """Ø¨Ø§Ø²ÛŒ Ø³Ù†Ú¯ Ú©Ø§ØºØ° Ù‚ÛŒÚ†ÛŒ - Ù†Ø³Ø®Ù‡ Ú¯Ø±ÙˆÙ‡ÛŒ"""
+    keyboard = {
+        "inline_keyboard": [
+            [
+                {"text": "ðŸª¨ Ø³Ù†Ú¯", "callback_data": "rps_rock"},
+                {"text": "ðŸ“„ Ú©Ø§ØºØ°", "callback_data": "rps_paper"},
+                {"text": "âœ‚ï¸ Ù‚ÛŒÚ†ÛŒ", "callback_data": "rps_scissors"}
+            ]
+        ]
+    }
+    text = "âœ‚ï¸ <b>Ø³Ù†Ú¯ØŒ Ú©Ø§ØºØ°ØŒ Ù‚ÛŒÚ†ÛŒ</b>\n\nØ§Ù†ØªØ®Ø§Ø¨ Ú©Ù†:"
+    await send_message(chat_id, text, reply_markup=keyboard)
+
+async def handle_guess(chat_id):
+    """Ø¨Ø§Ø²ÛŒ Ø­Ø¯Ø³ Ø¹Ø¯Ø¯"""
+    await send_message(chat_id, "ðŸŽ¯ <b>Ø­Ø¯Ø³ Ø¹Ø¯Ø¯</b>\n\nØ§ÛŒÙ† Ø¨Ø®Ø´ Ø¨Ù‡â€ŒØ²ÙˆØ¯ÛŒ Ø§Ø¶Ø§ÙÙ‡ Ø®ÙˆØ§Ù‡Ø¯ Ø´Ø¯!")
+
+
+===== handlers\moderation.py =====
+
+# handlers/moderation.py
+import re
+import time
+from collections import defaultdict
+from core.api_client import send_message, delete_message, send_typing_action
+from services.group_service import (
+    add_warning, get_warnings_count, ban_user, add_filter, get_filters,
+    get_filter_count, is_group_premium, set_antilink,
+    mute_user, unmute_user, is_user_muted, add_mod_log, get_mod_logs,
+    get_group_settings
+)
+from services.permission_service import is_group_admin
+from core.normalizer import normalize_text
+from core.api_client import send_message, delete_message, send_typing_action, join_chat
+
+MAX_WARNINGS = 3
+MAX_FREE_FILTERS = 3
+NO_PERMISSION_TEXT = "â›” Ø§ÛŒÙ† Ø¯Ø³ØªÙˆØ± ÙÙ‚Ø· Ø¨Ø±Ø§ÛŒ Ø§Ø¯Ù…ÛŒÙ†â€ŒÙ‡Ø§ÛŒ Ú¯Ø±ÙˆÙ‡ Ø¯Ø± Ø¯Ø³ØªØ±Ø³ Ø§Ø³Øª."
+
+# Ø¯ÛŒØªØ§Ø¨ÛŒØ³ Ù…ÙˆÙ‚Øª Ø¨Ø±Ø§ÛŒ Ø¶Ø¯ Ø§Ø³Ù¾Ù…
+_flood_cache = defaultdict(list)
+FLOOD_LIMIT = 5
+FLOOD_WINDOW = 5
+
+async def handle_warn(chat_id, message):
+    user_id = message["from"]["id"]
+    if not await is_group_admin(chat_id, user_id):
+        await send_message(chat_id, NO_PERMISSION_TEXT)
+        return
+
+    if not message.get("reply_to_message"):
+        await send_message(chat_id, "âŒ Ø§ÛŒÙ† Ø¯Ø³ØªÙˆØ± Ø¨Ø§ÛŒØ¯ Ø±ÙˆÛŒ Ù¾ÛŒØ§Ù… ÛŒÚ© Ú©Ø§Ø±Ø¨Ø± Ø±ÛŒÙ¾Ù„Ø§ÛŒ Ø´ÙˆØ¯.")
+        return
+
+    target_user = message["reply_to_message"]["from"]
+    parts = message.get("text", "").split(" ", 1)
+    reason = parts[1] if len(parts) > 1 else "Ø§Ø®Ø·Ø§Ø± Ø¯Ø³ØªÛŒ Ø§Ø¯Ù…ÛŒÙ†"
+
+    await add_warning(target_user["id"], chat_id, reason)
+    count = await get_warnings_count(target_user["id"], chat_id)
+    await add_mod_log(chat_id, user_id, "WARN", target_user["id"], reason)
+
+    if count >= MAX_WARNINGS:
+        await mute_user(target_user["id"], chat_id, 3600)
+        await send_message(
+            chat_id, 
+            f"ðŸ”‡ Ú©Ø§Ø±Ø¨Ø± <b>{target_user['first_name']}</b> Ø¨Ù‡ Ø¯Ù„ÛŒÙ„ Ø±Ø³ÛŒØ¯Ù† Ø¨Ù‡ Ø³Ù‚Ù Ø§Ø®Ø·Ø§Ø±Ù‡Ø§ØŒ Ø¨Ø±Ø§ÛŒ Û± Ø³Ø§Ø¹Øª Ù…ÛŒÙˆØª Ø´Ø¯!"
+        )
+    else:
+        await send_message(
+            chat_id, 
+            f"âš ï¸ Ø§Ø®Ø·Ø§Ø± Ø¨Ù‡ <b>{target_user['first_name']}</b> Ø¯Ø§Ø¯Ù‡ Ø´Ø¯.\n"
+            f"Ø¯Ù„ÛŒÙ„: {reason}\n"
+            f"ØªØ¹Ø¯Ø§Ø¯: {count}/{MAX_WARNINGS}"
+        )
+
+async def handle_ban(chat_id, message):
+    user_id = message["from"]["id"]
+    if not await is_group_admin(chat_id, user_id):
+        await send_message(chat_id, NO_PERMISSION_TEXT)
+        return
+        
+    if not message.get("reply_to_message"):
+        await send_message(chat_id, "âŒ Ø§ÛŒÙ† Ø¯Ø³ØªÙˆØ± Ø¨Ø§ÛŒØ¯ Ø±ÙˆÛŒ Ù¾ÛŒØ§Ù… Ú©Ø§Ø±Ø¨Ø± Ø±ÛŒÙ¾Ù„Ø§ÛŒ Ø´ÙˆØ¯.")
+        return
+        
+    target_user = message["reply_to_message"]["from"]
+    await ban_user(target_user["id"], chat_id)
+    await add_mod_log(chat_id, user_id, "BAN", target_user["id"], "Permanent Ban")
+    await send_message(chat_id, f"ðŸš« Ú©Ø§Ø±Ø¨Ø± <b>{target_user['first_name']}</b> Ø¨Ù† Ù…Ø¬Ø§Ø²ÛŒ Ø´Ø¯!")
+
+async def handle_filter(chat_id, text, user_id):
+    if not await is_group_admin(chat_id, user_id):
+        await send_message(chat_id, NO_PERMISSION_TEXT)
+        return
+        
+    parts = text.split(" ", 1)
+    if len(parts) < 2:
+        await send_message(chat_id, "âŒ Ø§Ø³ØªÙØ§Ø¯Ù‡: /filter [word]")
+        return
+        
+    word = normalize_text(parts[1].strip())
+    if len(word) < 2:
+        await send_message(chat_id, "âš ï¸ Ú©Ù„Ù…Ù‡ Ø¨Ø§ÛŒØ¯ Ø­Ø¯Ø§Ù‚Ù„ Û² Ú©Ø§Ø±Ø§Ú©ØªØ± Ø¨Ø§Ø´Ø¯.")
+        return
+    
+    is_premium = await is_group_premium(chat_id)
+    if not is_premium:
+        count = await get_filter_count(chat_id)
+        if count >= MAX_FREE_FILTERS:
+            await send_message(
+                chat_id, 
+                f"ðŸ”’ Ø¯Ø± Ù†Ø³Ø®Ù‡ Ø±Ø§ÛŒÚ¯Ø§Ù† ÙÙ‚Ø· {MAX_FREE_FILTERS} Ú©Ù„Ù…Ù‡ ÙÛŒÙ„ØªØ± Ù…ÛŒâ€ŒØ´ÙˆØ¯.\n"
+                f"Ø¨Ø±Ø§ÛŒ ÙÛŒÙ„ØªØ± Ù†Ø§Ù…Ø­Ø¯ÙˆØ¯ØŒ Ú¯Ø±ÙˆÙ‡ Ø±Ø§ Ø¨Ù‡ Premium Ø§Ø±ØªÙ‚Ø§ Ø¯Ù‡ÛŒØ¯."
+            )
+            return
+            
+    await add_filter(chat_id, word)
+    await send_message(chat_id, f"âœ… Ú©Ù„Ù…Ù‡ '{word}' ÙÛŒÙ„ØªØ± Ø´Ø¯.")
+
+async def handle_set_antilink(chat_id, text, user_id):
+    if not await is_group_admin(chat_id, user_id):
+        await send_message(chat_id, NO_PERMISSION_TEXT)
+        return
+        
+    parts = text.split(" ", 1)
+    if len(parts) < 2 or parts[1].strip().lower() not in ["on", "off"]:
+        await send_message(chat_id, "âŒ Ø§Ø³ØªÙØ§Ø¯Ù‡: /setantilink [on/off]")
+        return
+        
+    enabled = parts[1].strip().lower() == "on"
+    await set_antilink(chat_id, enabled)
+    await send_message(
+        chat_id, 
+        "ðŸ›¡ Ø¢Ù†ØªÛŒâ€ŒÙ„ÛŒÙ†Ú© ÙØ¹Ø§Ù„ Ø´Ø¯." if enabled else "ðŸ”“ Ø¢Ù†ØªÛŒâ€ŒÙ„ÛŒÙ†Ú© ØºÛŒØ±ÙØ¹Ø§Ù„ Ø´Ø¯."
+    )
+
+async def handle_mute(chat_id, message, admin_id):
+    if not await is_group_admin(chat_id, admin_id):
+        await send_message(chat_id, NO_PERMISSION_TEXT)
+        return
+        
+    if not message.get("reply_to_message"):
+        await send_message(chat_id, "âŒ Ø§ÛŒÙ† Ø¯Ø³ØªÙˆØ± Ø¨Ø§ÛŒØ¯ Ø±ÙˆÛŒ Ù¾ÛŒØ§Ù… ÛŒÚ© Ú©Ø§Ø±Ø¨Ø± Ø±ÛŒÙ¾Ù„Ø§ÛŒ Ø´ÙˆØ¯.")
+        return
+        
+    target_user = message["reply_to_message"]["from"]
+    parts = message.get("text", "").split()
+    
+    duration_min = 10
+    if len(parts) > 1:
+        try:
+            duration_min = int(parts[1])
+        except ValueError:
+            pass
+            
+    reason = " ".join(parts[2:]) if len(parts) > 2 else "Ø¨Ø¯ÙˆÙ† Ø¯Ù„ÛŒÙ„ Ù…Ø´Ø®Øµ"
+    duration_sec = duration_min * 60
+    
+    await mute_user(target_user["id"], chat_id, duration_sec)
+    await add_mod_log(chat_id, admin_id, "MUTE", target_user["id"], reason)
+    
+    text = (
+        f"ðŸ”‡ Ú©Ø§Ø±Ø¨Ø± <b>{target_user['first_name']}</b> Ø¨Ø±Ø§ÛŒ <b>{duration_min} Ø¯Ù‚ÛŒÙ‚Ù‡</b> Ù…ÛŒÙˆØª Ø´Ø¯.\n"
+        f"Ø¯Ù„ÛŒÙ„: {reason}"
+    )
+    await send_message(chat_id, text)
+
+async def handle_unmute(chat_id, message, admin_id):
+    if not await is_group_admin(chat_id, admin_id):
+        await send_message(chat_id, NO_PERMISSION_TEXT)
+        return
+        
+    if not message.get("reply_to_message"):
+        await send_message(chat_id, "âŒ Ø§ÛŒÙ† Ø¯Ø³ØªÙˆØ± Ø¨Ø§ÛŒØ¯ Ø±ÙˆÛŒ Ù¾ÛŒØ§Ù… ÛŒÚ© Ú©Ø§Ø±Ø¨Ø± Ø±ÛŒÙ¾Ù„Ø§ÛŒ Ø´ÙˆØ¯.")
+        return
+        
+    target_user = message["reply_to_message"]["from"]
+    await unmute_user(target_user["id"], chat_id)
+    await add_mod_log(chat_id, admin_id, "UNMUTE", target_user["id"], "Manual unmute")
+    await send_message(chat_id, f"ðŸ”Š Ú©Ø§Ø±Ø¨Ø± <b>{target_user['first_name']}</b> Ø¢Ù†Ù…ÛŒÙˆØª Ø´Ø¯.")
+
+async def handle_kick(chat_id, message, admin_id):
+    from core.api_client import kick_chat_member
+    
+    if not await is_group_admin(chat_id, admin_id):
+        await send_message(chat_id, NO_PERMISSION_TEXT)
+        return
+        
+    if not message.get("reply_to_message"):
+        await send_message(chat_id, "âŒ Ø§ÛŒÙ† Ø¯Ø³ØªÙˆØ± Ø¨Ø§ÛŒØ¯ Ø±ÙˆÛŒ Ù¾ÛŒØ§Ù… ÛŒÚ© Ú©Ø§Ø±Ø¨Ø± Ø±ÛŒÙ¾Ù„Ø§ÛŒ Ø´ÙˆØ¯.")
+        return
+        
+    target_user = message["reply_to_message"]["from"]
+    res = await kick_chat_member(chat_id, target_user["id"])
+    
+    if res and res.get("ok"):
+        await add_mod_log(chat_id, admin_id, "KICK", target_user["id"], "Manual kick")
+        await send_message(chat_id, f"ðŸ‘¢ Ú©Ø§Ø±Ø¨Ø± <b>{target_user['first_name']}</b> Ø§Ø² Ú¯Ø±ÙˆÙ‡ Ø§Ø®Ø±Ø§Ø¬ Ø´Ø¯!")
+    else:
+        await send_message(chat_id, "âŒ Ø§Ø®Ø±Ø§Ø¬ Ù†Ø§Ù…ÙˆÙÙ‚ Ø¨ÙˆØ¯. Ù…Ø·Ù…Ø¦Ù† Ø´ÙˆÛŒØ¯ Ø±Ø¨Ø§Øª Ø§Ø¯Ù…ÛŒÙ† Ø§Ø³Øª.")
+
+async def handle_logs(chat_id, admin_id):
+    if not await is_group_admin(chat_id, admin_id):
+        await send_message(chat_id, NO_PERMISSION_TEXT)
+        return
+        
+    logs = await get_mod_logs(chat_id)
+    if not logs:
+        await send_message(chat_id, "ðŸ“œ Ù‡Ù†ÙˆØ² Ù‡ÛŒÚ† Ø§Ù‚Ø¯Ø§Ù… Ù…Ø¯ÛŒØ±ÛŒØªÛŒ Ø«Ø¨Øª Ù†Ø´Ø¯Ù‡ Ø§Ø³Øª.")
+        return
+        
+    text = "ðŸ“œ <b>Ø¢Ø®Ø±ÛŒÙ† Ø§Ù‚Ø¯Ø§Ù…Ø§Øª Ù…Ø¯ÛŒØ±ÛŒØªÛŒ Ú¯Ø±ÙˆÙ‡:</b>\n\n"
+    for log in logs:
+        text += (
+            f"ðŸ‘¤ Ø§Ø¯Ù…ÛŒÙ†: <code>{log['admin_id']}</code> | ðŸŽ¯ Ù‡Ø¯Ù: <code>{log['target_id']}</code>\n"
+            f"Ø§Ù‚Ø¯Ø§Ù…: <b>{log['action']}</b> - Ø¯Ù„ÛŒÙ„: {log['reason']}\n"
+            f"â± {log['date']}\n"
+            f"âž–âž–âž–âž–âž–âž–\n"
+        )
+        
+    await send_message(chat_id, text)
+
+# Ø¯Ø± Ø§Ù†ØªÙ‡Ø§ÛŒ ÙØ§ÛŒÙ„ handlers/moderation.py Ø§ÛŒÙ† ØªØ§Ø¨Ø¹ Ø±Ø§ Ø§ØµÙ„Ø§Ø­ Ú©Ù†ÛŒØ¯:
+
+async def handle_end_vote(chat_id, admin_id):
+    if not await is_group_admin(chat_id, admin_id):
+        await send_message(chat_id, NO_PERMISSION_TEXT)
+        return
+        
+    from handlers.fun import end_vote
+    ended = await end_vote(chat_id)
+    
+    if ended:
+        await send_message(chat_id, "âœ… Ù†Ø¸Ø±Ø³Ù†Ø¬ÛŒ ÙØ¹Ø§Ù„ Ø¨Ø§ Ù…ÙˆÙÙ‚ÛŒØª Ù¾Ø§ÛŒØ§Ù† Ø¯Ø§Ø¯Ù‡ Ø´Ø¯.")
+    else:
+        await send_message(chat_id, "âš ï¸ Ù‡ÛŒÚ† Ù†Ø¸Ø±Ø³Ù†Ø¬ÛŒ ÙØ¹Ø§Ù„ÛŒ Ø¯Ø± Ø§ÛŒÙ† Ú¯Ø±ÙˆÙ‡ ÙˆØ¬ÙˆØ¯ Ù†Ø¯Ø§Ø±Ø¯.")
+
+async def check_message_violations(chat_id, message):
+    text = message.get("text", "")
+    message_id = message["message_id"]
+    user_id = message["from"]["id"]
+    first_name = message["from"].get("first_name", "Ú©Ø§Ø±Ø¨Ø±")
+    
+    settings = await get_group_settings(chat_id)
+
+    # Û±. Ø¨Ø±Ø±Ø³ÛŒ Ø¶Ø¯ Ù„ÛŒÙ†Ú© (Ø¨Ø±Ú¯Ø´Øª Ø¨Ù‡ Ø­Ø§Ù„Øª Ø¹Ø§Ø¯ÛŒ - Ù¾Ø§Ú© Ú©Ø±Ø¯Ù† Ù„ÛŒÙ†Ú©â€ŒÙ‡Ø§)
+    if settings.get("antilink", 1) or settings.get("lock_links", 0):
+        url_pattern = re.compile(r'(https?://\S+|www\.\S+|t\.me/\S+|telegram\.me/\S+|splus\.ir/\S+)', re.IGNORECASE)
+        if url_pattern.search(text):
+            await delete_message(chat_id, message_id)
+            if settings.get("antilink", 1):
+                await send_message(chat_id, "ðŸ›‘ Ø§Ø±Ø³Ø§Ù„ Ù„ÛŒÙ†Ú© Ù…Ù…Ù†ÙˆØ¹ Ø§Ø³Øª!")
+            return True
+
+    # Û². Ø¨Ø±Ø±Ø³ÛŒ ÙÛŒÙ„ØªØ± Ú©Ù„Ù…Ø§Øª
+    if settings.get("filter_enabled", 1):
+        filters = await get_filters(chat_id)
+        normalized_text = normalize_text(text)
+        for bad_word in filters:
+            if bad_word in normalized_text:
+                await delete_message(chat_id, message_id)
+                await send_message(chat_id, "ðŸ›‘ Ø§Ø³ØªÙØ§Ø¯Ù‡ Ø§Ø² Ú©Ù„Ù…Ø§Øª Ù…Ù…Ù†ÙˆØ¹Ù‡ Ù…Ø¬Ø§Ø² Ù†ÛŒØ³Øª!")
+                return True
+
+    # Û³. Ø¨Ø±Ø±Ø³ÛŒ Ù‚ÙÙ„â€ŒÙ‡Ø§ÛŒ Ø±Ø³Ø§Ù†Ù‡â€ŒØ§ÛŒ
+    if settings.get("lock_photos", 0) and message.get("photo"):
+        await delete_message(chat_id, message_id)
+        return True
+    if settings.get("lock_videos", 0) and message.get("video"):
+        await delete_message(chat_id, message_id)
+        return True
+    if settings.get("lock_stickers", 0) and message.get("sticker"):
+        await delete_message(chat_id, message_id)
+        return True
+    if settings.get("lock_forward", 0) and (message.get("forward_from") or message.get("forward_from_chat")):
+        await delete_message(chat_id, message_id)
+        return True
+
+    # Û´. Ø¨Ø±Ø±Ø³ÛŒ Ø§Ø³Ù¾Ù… Ùˆ ÙÙ„ÙˆØ¯
+    if settings.get("antispam", 1):
+        now = time.time()
+        cache_key = (chat_id, user_id)
+        
+        _flood_cache[cache_key] = [t for t in _flood_cache[cache_key] if now - t < FLOOD_WINDOW]
+        _flood_cache[cache_key].append(now)
+        
+        if len(_flood_cache[cache_key]) > FLOOD_LIMIT:
+            await delete_message(chat_id, message_id)
+            await send_message(chat_id, f"âš ï¸ Ú©Ø§Ø±Ø¨Ø± <b>{first_name}</b> Ø¨Ù‡ Ø¯Ù„ÛŒÙ„ Ø§Ø³Ù¾Ù… Ù…Ø­Ø¯ÙˆØ¯ Ø´Ø¯!")
+            _flood_cache[cache_key] = [] 
+            
+            await add_warning(user_id, chat_id, "Ø§Ø³Ù¾Ù… Ùˆ ÙÙ„ÙˆØ¯")
+            count = await get_warnings_count(user_id, chat_id)
+            
+            if count >= MAX_WARNINGS:
+                await mute_user(user_id, chat_id, 1800)
+                await send_message(
+                    chat_id, 
+                    f"ðŸ”‡ Ú©Ø§Ø±Ø¨Ø± <b>{first_name}</b> Ø¨Ù‡ Ø¯Ù„ÛŒÙ„ ØªÚ©Ø±Ø§Ø± Ø§Ø³Ù¾Ù…ØŒ Ø¨Ø±Ø§ÛŒ Û³Û° Ø¯Ù‚ÛŒÙ‚Ù‡ Ù…ÛŒÙˆØª Ø´Ø¯!"
+                )
+            return True
+
+    return False
+
+    # Û². Ø¨Ø±Ø±Ø³ÛŒ ÙÛŒÙ„ØªØ± Ú©Ù„Ù…Ø§Øª
+    if settings.get("filter_enabled", 1):
+        filters = await get_filters(chat_id)
+        normalized_text = normalize_text(text)
+        for bad_word in filters:
+            if bad_word in normalized_text:
+                await delete_message(chat_id, message_id)
+                await send_message(chat_id, "ðŸ›‘ Ø§Ø³ØªÙØ§Ø¯Ù‡ Ø§Ø² Ú©Ù„Ù…Ø§Øª Ù…Ù…Ù†ÙˆØ¹Ù‡ Ù…Ø¬Ø§Ø² Ù†ÛŒØ³Øª!")
+                return True
+
+    # Û³. Ø¨Ø±Ø±Ø³ÛŒ Ù‚ÙÙ„â€ŒÙ‡Ø§ÛŒ Ø±Ø³Ø§Ù†Ù‡â€ŒØ§ÛŒ
+    if settings.get("lock_photos", 0) and message.get("photo"):
+        await delete_message(chat_id, message_id)
+        return True
+    if settings.get("lock_videos", 0) and message.get("video"):
+        await delete_message(chat_id, message_id)
+        return True
+    if settings.get("lock_stickers", 0) and message.get("sticker"):
+        await delete_message(chat_id, message_id)
+        return True
+    if settings.get("lock_forward", 0) and (message.get("forward_from") or message.get("forward_from_chat")):
+        await delete_message(chat_id, message_id)
+        return True
+
+    # Û´. Ø¨Ø±Ø±Ø³ÛŒ Ø§Ø³Ù¾Ù… Ùˆ ÙÙ„ÙˆØ¯
+    if settings.get("antispam", 1):
+        now = time.time()
+        cache_key = (chat_id, user_id)
+        
+        _flood_cache[cache_key] = [t for t in _flood_cache[cache_key] if now - t < FLOOD_WINDOW]
+        _flood_cache[cache_key].append(now)
+        
+        if len(_flood_cache[cache_key]) > FLOOD_LIMIT:
+            await delete_message(chat_id, message_id)
+            await send_message(chat_id, f"âš ï¸ Ú©Ø§Ø±Ø¨Ø± <b>{first_name}</b> Ø¨Ù‡ Ø¯Ù„ÛŒÙ„ Ø§Ø³Ù¾Ù… Ù…Ø­Ø¯ÙˆØ¯ Ø´Ø¯!")
+            _flood_cache[cache_key] = [] 
+            
+            await add_warning(user_id, chat_id, "Ø§Ø³Ù¾Ù… Ùˆ ÙÙ„ÙˆØ¯")
+            count = await get_warnings_count(user_id, chat_id)
+            
+            if count >= MAX_WARNINGS:
+                await mute_user(user_id, chat_id, 1800)
+                await send_message(
+                    chat_id, 
+                    f"ðŸ”‡ Ú©Ø§Ø±Ø¨Ø± <b>{first_name}</b> Ø¨Ù‡ Ø¯Ù„ÛŒÙ„ ØªÚ©Ø±Ø§Ø± Ø§Ø³Ù¾Ù…ØŒ Ø¨Ø±Ø§ÛŒ Û³Û° Ø¯Ù‚ÛŒÙ‚Ù‡ Ù…ÛŒÙˆØª Ø´Ø¯!"
+                )
+            return True
+
+    return False
+
+
+===== services\ai_service.py =====
+
+# services/ai_service.py
+import httpx
+import logging
+import asyncio
+import json
+from config import AVALAI_API_KEY
+
+AVALAI_BASE_URL = "https://api.avalai.ir/v1"
+_ai_client = httpx.AsyncClient(timeout=30.0)
+
+# Ø§ÛŒØ¬Ø§Ø¯ ÛŒÚ© Semaphore Ø¨Ø±Ø§ÛŒ Ù…Ø­Ø¯ÙˆØ¯ Ú©Ø±Ø¯Ù† Ø¯Ø±Ø®ÙˆØ§Ø³Øªâ€ŒÙ‡Ø§ÛŒ Ù‡Ù…Ø²Ù…Ø§Ù† (ÙÙ‚Ø· Û² Ø¯Ø±Ø®ÙˆØ§Ø³Øª Ù‡Ù…Ø²Ù…Ø§Ù†)
+_ai_semaphore = asyncio.Semaphore(2)
+
+async def ask_ai(prompt):
+    """Ø§Ø±Ø³Ø§Ù„ Ø¯Ø±Ø®ÙˆØ§Ø³Øª Ø¨Ù‡ AvalAI Ø¨Ø§ Ø³ÛŒØ³ØªÙ… Ù…Ø­Ø¯ÙˆØ¯ÛŒØª Ù‡Ù…Ø²Ù…Ø§Ù†ÛŒ (ØµÙ)"""
+    async with _ai_semaphore:
+        headers = {
+            "Authorization": f"Bearer {AVALAI_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        
+        system_prompt = "Your name is France (ÙØ±Ø§Ù†Ø³). You are a fun, smart, and friendly AI assistant inside a Telegram/Soroush group bot. Answer in Persian concisely and casually."
+        
+        payload = {
+            "model": "gpt-4o-mini",
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt}
+            ],
+            "max_tokens": 800
+        }
+        
+        try:
+            resp = await _ai_client.post(f"{AVALAI_BASE_URL}/chat/completions", headers=headers, json=payload)
+            
+            if resp.status_code == 429:
+                logging.error("AvalAI Rate Limit Hit (429)")
+                return "ðŸ‡«ðŸ‡· ÙØ±Ø§Ù†Ø³ Ø§Ù„Ø§Ù† Ù…ØºØ²Ø´ Ø®ÛŒÙ„ÛŒ Ø¯Ø±Ú¯ÛŒØ±Ù‡! Ú†Ù†Ø¯ Ø«Ø§Ù†ÛŒÙ‡ Ø¯ÛŒÚ¯Ù‡ Ø¯ÙˆØ¨Ø§Ø±Ù‡ Ø³ÙˆØ§Ù„Ùˆ Ø¨Ù¾Ø±Ø³."
+            
+            if resp.status_code == 200:
+                return resp.json()["choices"][0]["message"]["content"]
+            else:
+                logging.error(f"AvalAI Error: {resp.status_code} - {resp.text}")
+                return f"ðŸ‡«ðŸ‡· ÙØ±Ø§Ù†Ø³ Ø§Ù„Ø§Ù† Ø¬ÙˆØ§Ø¨ Ù†Ù…ÛŒØ¯Ù‡ (Ú©Ø¯ Ø®Ø·Ø§: {resp.status_code})."
+                
+        except httpx.TimeoutException:
+            logging.error("AvalAI Timeout")
+            return "â³ Ù¾Ø§Ø³Ø® Ù‡ÙˆØ´ Ù…ØµÙ†ÙˆØ¹ÛŒ Ø·ÙˆÙ„Ø§Ù†ÛŒ Ø´Ø¯ØŒ Ø¯ÙˆØ¨Ø§Ø±Ù‡ Ø§Ù…ØªØ­Ø§Ù† Ú©Ù†."
+            
+        except Exception as e:
+            logging.error(f"AvalAI Error: {type(e).__name__} - {e}")
+            return "ðŸ‡«ðŸ‡· ÙØ±Ø§Ù†Ø³ Ø§Ù„Ø§Ù† Ø¨Ù‡ Ø§ÛŒÙ†ØªØ±Ù†Øª ÙˆØµÙ„ Ù†Ù…ÛŒØ´Ù‡."
+
+
+async def generate_trivia_question():
+    """ØªÙˆÙ„ÛŒØ¯ Ø³ÙˆØ§Ù„ Ù…Ø³Ø§Ø¨Ù‚Ù‡ ØªÙˆØ³Ø· Ù‡ÙˆØ´ Ù…ØµÙ†ÙˆØ¹ÛŒ"""
+    # Ø§Ø³ØªÙØ§Ø¯Ù‡ Ø§Ø² ØµÙ Ø¨Ø±Ø§ÛŒ Ø¬Ù„ÙˆÚ¯ÛŒØ±ÛŒ Ø§Ø² Ù‡Ù†Ú¯ÛŒ
+    async with _ai_semaphore:
+        prompt = (
+            "ÛŒÚ© Ø³ÙˆØ§Ù„ Ø¯Ø§Ù†Ø´ Ø¹Ù…ÙˆÙ…ÛŒ Ø¬Ø°Ø§Ø¨ Ùˆ Ù…ØªÙ†ÙˆØ¹ Ø¨Ù‡ Ø²Ø¨Ø§Ù† ÙØ§Ø±Ø³ÛŒ Ø·Ø±Ø§Ø­ÛŒ Ú©Ù†. Ø³ÙˆØ§Ù„ Ø¨Ø§ÛŒØ¯ Û´ Ú¯Ø²ÛŒÙ†Ù‡ Ø¯Ø§Ø´ØªÙ‡ Ø¨Ø§Ø´Ø¯. "
+            "Ù„Ø·ÙØ§Ù‹ Ø¯Ù‚ÛŒÙ‚Ø§Ù‹ Ùˆ ÙÙ‚Ø· Ø¯Ø± ÙØ±Ù…Øª JSON Ø²ÛŒØ± Ù¾Ø§Ø³Ø® Ø¨Ø¯Ù‡ Ùˆ Ù‡ÛŒÚ† Ù…ØªÙ† ÛŒØ§ ØªÙˆØ¶ÛŒØ­ Ø§Ø¶Ø§ÙÙ‡â€ŒØ§ÛŒ Ù†Ù†ÙˆÛŒØ³:\n"
+            '{"question": "Ù…ØªÙ† Ø³ÙˆØ§Ù„", "options": ["Ú¯Ø²ÛŒÙ†Ù‡ Û±", "Ú¯Ø²ÛŒÙ†Ù‡ Û²", "Ú¯Ø²ÛŒÙ†Ù‡ Û³", "Ú¯Ø²ÛŒÙ†Ù‡ Û´"], "answer": 0}\n'
+            "Ù…Ù‚Ø¯Ø§Ø± answer Ø¨Ø§ÛŒØ¯ Ø¹Ø¯Ø¯ Ø§ÛŒÙ†Ø¯Ú©Ø³ Ú¯Ø²ÛŒÙ†Ù‡ Ø¯Ø±Ø³Øª Ø¨Ø§Ø´Ø¯ (Ø§Ø² 0 ØªØ§ 3)."
+        )
+        
+        try:
+            response = await ask_ai(prompt)
+            response = response.strip()
+            if response.startswith("```json"):
+                response = response[7:]
+            if response.startswith("```"):
+                response = response[3:]
+            if response.endswith("```"):
+                response = response[:-3]
+            response = response.strip()
+            
+            data = json.loads(response)
+            
+            if "question" in data and "options" in data and "answer" in data:
+                if len(data["options"]) == 4 and int(data["answer"]) in [0, 1, 2, 3]:
+                    data["answer"] = int(data["answer"])
+                    return data
+        except Exception as e:
+            logging.error(f"Trivia AI Error: {e}")
+            
+    return None
+
+
+===== services\economy_service.py =====
+
+# services/economy_service.py
+import time
+from core.database import execute_query
+
+async def get_balance(user_id, chat_id):
+    row = await execute_query("SELECT coins FROM user_stats WHERE user_id=? AND chat_id=?", (user_id, chat_id), fetch=True)
+    return row[0]["coins"] if row and row[0]["coins"] is not None else 0
+
+async def add_coins(user_id, chat_id, amount):
+    # Ø§Ø·Ù…ÛŒÙ†Ø§Ù† Ø§Ø² ÙˆØ¬ÙˆØ¯ Ú©Ø§Ø±Ø¨Ø± Ø¯Ø± Ø¯ÛŒØªØ§Ø¨ÛŒØ³
+    await execute_query("INSERT OR IGNORE INTO user_stats (user_id, chat_id) VALUES (?, ?)", (user_id, chat_id))
+    # Ø¢Ù¾Ø¯ÛŒØª Ø³Ú©Ù‡â€ŒÙ‡Ø§ (Ø§Ú¯Ù‡ Ù…Ù†ÙÛŒ Ø´Ø¯ Ø¬Ù„ÙˆÚ¯ÛŒØ±ÛŒ Ù…ÛŒâ€ŒÚ©Ù†ÛŒÙ…)
+    if amount < 0:
+        await execute_query("UPDATE user_stats SET coins = MAX(0, COALESCE(coins, 0) + ?) WHERE user_id=? AND chat_id=?", (amount, user_id, chat_id))
+    else:
+        await execute_query("UPDATE user_stats SET coins = COALESCE(coins, 0) + ? WHERE user_id=? AND chat_id=?", (amount, user_id, chat_id))
+
+async def claim_daily(user_id, chat_id):
+    row = await execute_query("SELECT last_daily, daily_streak FROM user_stats WHERE user_id=? AND chat_id=?", (user_id, chat_id), fetch=True)
+    now = int(time.time())
+    
+    if row and row[0]["last_daily"]:
+        last_claim = row[0]["last_daily"]
+        current_streak = row[0]["daily_streak"]
+        
+        # Û±Û² Ø³Ø§Ø¹Øª Ø¨Ø± Ø­Ø³Ø¨ Ø«Ø§Ù†ÛŒÙ‡ (43200 Ø«Ø§Ù†ÛŒÙ‡)
+        if now - last_claim < 43200:
+            remaining_seconds = 43200 - (now - last_claim)
+            return False, remaining_seconds, current_streak
+            
+        # Ø§Ú¯Ø± Ø¨ÛŒÙ† Û±Û² ØªØ§ Û²Û´ Ø³Ø§Ø¹Øª Ú¯Ø°Ø´ØªÙ‡ Ø¨Ø§Ø´Ù‡ØŒ Ø§Ø³ØªØ±ÛŒÚ© Ø­ÙØ¸ Ù…ÛŒØ´Ù‡ (86400 Ø«Ø§Ù†ÛŒÙ‡)
+        if now - last_claim < 86400:
+            new_streak = current_streak + 1
+        else:
+            new_streak = 1 # Ø§Ú¯Ø± Ø¨ÛŒØ´ØªØ± Ø§Ø² Û²Û´ Ø³Ø§Ø¹Øª Ú¯Ø°Ø´ØªØŒ Ø§Ø³ØªØ±ÛŒÚ© Ø±ÛŒØ³Øª Ù…ÛŒØ´Ù‡
+    else:
+        new_streak = 1 # Ø§ÙˆÙ„ÛŒÙ† Ø¨Ø§Ø±
+        
+    # Ù…Ø­Ø§Ø³Ø¨Ù‡ Ø¬Ø§ÛŒØ²Ù‡: Û±Û°Û° Ø³Ú©Ù‡ Ù¾Ø§ÛŒÙ‡ + Û²Û° Ø³Ú©Ù‡ Ø¨Ø±Ø§ÛŒ Ù‡Ø± Ø±ÙˆØ² Ø§Ø³ØªØ±ÛŒÚ©
+    reward = 100 + (new_streak - 1) * 20
+    await add_coins(user_id, chat_id, reward)
+    await execute_query("UPDATE user_stats SET last_daily=?, daily_streak=? WHERE user_id=? AND chat_id=?", (now, new_streak, user_id, chat_id))
+    
+    # Ú†Ú© Ú©Ø±Ø¯Ù† Ø¯Ø³ØªØ§ÙˆØ±Ø¯ Ø§Ø³ØªØ±ÛŒÚ© Û· Ø±ÙˆØ²Ù‡
+    if new_streak == 7:
+        await add_achievement(user_id, chat_id, "ðŸ”¥ Ø§Ø³ØªØ±ÛŒÚ© Û· Ø±ÙˆØ²Ù‡")
+        
+    return True, reward, new_streak
+
+async def add_achievement(user_id, chat_id, badge):
+    """Ø§Ø¹Ø·Ø§ÛŒ ÛŒÚ© Ø¯Ø³ØªØ§ÙˆØ±Ø¯ Ø¨Ù‡ Ú©Ø§Ø±Ø¨Ø±"""
+    await execute_query("INSERT OR IGNORE INTO user_achievements (user_id, chat_id, badge) VALUES (?, ?, ?)", (user_id, chat_id, badge))
+
+async def get_achievements(user_id, chat_id):
+    """Ú¯Ø±ÙØªÙ† Ù„ÛŒØ³Øª Ø¯Ø³ØªØ§ÙˆØ±Ø¯Ù‡Ø§ÛŒ Ú©Ø§Ø±Ø¨Ø±"""
+    rows = await execute_query("SELECT badge FROM user_achievements WHERE user_id=? AND chat_id=?", (user_id, chat_id), fetch=True)
+    return [row["badge"] for row in rows] if rows else []
+import random
+
+# Ø¢ÛŒØªÙ…â€ŒÙ‡Ø§ÛŒ ÙØ±ÙˆØ´Ú¯Ø§Ù‡
+SHOP_ITEMS = {
+    "vip_badge": {"name": "ðŸ† Ø¨Ø¬ ÙˆÛŒâ€ŒØ¢ÛŒâ€ŒÙ¾ÛŒ", "price": 5000},
+    "custom_name": {"name": "ðŸŽ¨ Ø§Ø³Ù… Ø±Ù†Ú¯ÛŒ", "price": 2000},
+    "rob_shield": {"name": "ðŸ›¡ Ø³Ù¾Ø± Ø¯Ø²Ø¯ÛŒ (Û²Û´ Ø³Ø§Ø¹Øª)", "price": 1500}
+}
+
+async def do_work(user_id, chat_id):
+    """Ú©Ø§Ø± Ú©Ø±Ø¯Ù† Ø¨Ø±Ø§ÛŒ Ú©Ø³Ø¨ Ø³Ú©Ù‡ (Ù‡Ø± Û± Ø³Ø§Ø¹Øª ÛŒÚ©â€ŒØ¨Ø§Ø±)"""
+    now = int(time.time())
+    row = await execute_query("SELECT last_work FROM user_stats WHERE user_id=? AND chat_id=?", (user_id, chat_id), fetch=True)
+    
+    if row and row[0]["last_work"]:
+        if now - row[0]["last_work"] < 3600: # 1 Ø³Ø§Ø¹Øª
+            remaining = 3600 - (now - row[0]["last_work"])
+            return False, remaining
+            
+    reward = random.randint(50, 200)
+    await add_coins(user_id, chat_id, reward)
+    await execute_query("UPDATE user_stats SET last_work=? WHERE user_id=? AND chat_id=?", (now, user_id, chat_id))
+    return True, reward
+
+async def do_rob(user_id, chat_id, target_id):
+    """Ø¯Ø²Ø¯ÛŒ Ø§Ø² Ú©Ø§Ø±Ø¨Ø± Ø¯ÛŒÚ¯Ø± (Ù‡Ø± Û¶ Ø³Ø§Ø¹Øª ÛŒÚ©â€ŒØ¨Ø§Ø±)"""
+    now = int(time.time())
+    row = await execute_query("SELECT last_rob FROM user_stats WHERE user_id=? AND chat_id=?", (user_id, chat_id), fetch=True)
+    
+    if row and row[0]["last_rob"]:
+        if now - row[0]["last_rob"] < 21600: # 6 Ø³Ø§Ø¹Øª
+            remaining = 21600 - (now - row[0]["last_rob"])
+            return "cooldown", remaining
+            
+    target_balance = await get_balance(target_id, chat_id)
+    if target_balance < 100:
+        return "poor_target", 0
+        
+    # ÛµÛ° Ø¯Ø±ØµØ¯ Ø´Ø§Ù†Ø³ Ù…ÙˆÙÙ‚ÛŒØª
+    if random.random() < 0.5:
+        stolen = random.randint(50, min(200, target_balance))
+        await add_coins(user_id, chat_id, stolen)
+        await add_coins(target_id, chat_id, -stolen)
+        await execute_query("UPDATE user_stats SET last_rob=? WHERE user_id=? AND chat_id=?", (now, user_id, chat_id))
+        return "success", stolen
+    else:
+        # Ø¬Ø±ÛŒÙ…Ù‡ Ø´Ú©Ø³Øª
+        fine = 50
+        await add_coins(user_id, chat_id, -fine)
+        await execute_query("UPDATE user_stats SET last_rob=? WHERE user_id=? AND chat_id=?", (now, user_id, chat_id))
+        return "failed", fine
+
+async def transfer_coins(user_id, chat_id, target_id, amount):
+    """Ø§Ù†ØªÙ‚Ø§Ù„ Ø³Ú©Ù‡ Ø¨Ù‡ Ú©Ø§Ø±Ø¨Ø± Ø¯ÛŒÚ¯Ø±"""
+    balance = await get_balance(user_id, chat_id)
+    if balance < amount:
+        return False
+    await add_coins(user_id, chat_id, -amount)
+    await add_coins(target_id, chat_id, amount)
+    return True
+
+async def buy_item(user_id, chat_id, item_id):
+    """Ø®Ø±ÛŒØ¯ Ø¢ÛŒØªÙ… Ø§Ø² ÙØ±ÙˆØ´Ú¯Ø§Ù‡"""
+    if item_id not in SHOP_ITEMS:
+        return False, "Ø¢ÛŒØªÙ… ÙˆØ¬ÙˆØ¯ Ù†Ø¯Ø§Ø±Ø¯."
+        
+    price = SHOP_ITEMS[item_id]["price"]
+    balance = await get_balance(user_id, chat_id)
+    if balance < price:
+        return False, "Ø³Ú©Ù‡ Ú©Ø§ÙÛŒ Ù†Ø¯Ø§Ø±ÛŒØ¯."
+        
+    await add_coins(user_id, chat_id, -price)
+    await execute_query("INSERT OR IGNORE INTO user_inventory (user_id, chat_id, item) VALUES (?, ?, ?)", (user_id, chat_id, item_id))
+    return True, SHOP_ITEMS[item_id]["name"]
+
+
+===== services\group_service.py =====
+
+# services/group_service.py
+import time
+from core.database import execute_query, _db_conn
+
+_settings_cache = {}
+_filters_cache = {}
+
+async def ensure_group_exists(chat_id):
+    await execute_query("INSERT OR IGNORE INTO groups (chat_id) VALUES (?)", (chat_id,))
+
+async def get_group_settings(chat_id):
+    """Ú¯Ø±ÙØªÙ† ØªÙ†Ø¸ÛŒÙ…Ø§Øª Ø¨Ø§ Ú©Ø´ Ûµ Ø¯Ù‚ÛŒÙ‚Ù‡â€ŒØ§ÛŒ"""
+    current_time = time.time()
+    if chat_id in _settings_cache and current_time - _settings_cache[chat_id]["time"] < 300:
+        return _settings_cache[chat_id]["data"]
+        
+    await ensure_group_exists(chat_id)
+    row = await execute_query("SELECT antilink, antispam, filter_enabled, welcome_enabled, lock_links, lock_photos, lock_videos, lock_stickers, lock_forward FROM groups WHERE chat_id=?", (chat_id,), fetch=True)
+    data = dict(row[0]) if row else {}
+    _settings_cache[chat_id] = {"time": current_time, "data": data}
+    return data
+
+async def toggle_setting(chat_id, setting_name):
+    """Ø±ÙˆØ´Ù† ÛŒØ§ Ø®Ø§Ù…ÙˆØ´ Ú©Ø±Ø¯Ù† ØªÙ†Ø¸ÛŒÙ…Ø§Øª Ùˆ Ø°Ø®ÛŒØ±Ù‡ ÙÙˆØ±ÛŒ"""
+    await ensure_group_exists(chat_id)
+    row = await execute_query(f"SELECT {setting_name} FROM groups WHERE chat_id=?", (chat_id,), fetch=True)
+    current = bool(row[0][setting_name]) if row else False
+    new_val = 0 if current else 1
+    await execute_query(f"UPDATE groups SET {setting_name}=? WHERE chat_id=?", (new_val, chat_id))
+    
+    # Ø°Ø®ÛŒØ±Ù‡ ÙÙˆØ±ÛŒ Ø¯Ø± Ø¯ÛŒØªØ§Ø¨ÛŒØ³ (Commit)
+    if _db_conn:
+        await _db_conn.commit()
+    
+    # Ø¢Ù¾Ø¯ÛŒØª Ú©Ø´
+    if chat_id in _settings_cache:
+        _settings_cache[chat_id]["data"][setting_name] = new_val
+    else:
+        _settings_cache[chat_id] = {"time": time.time(), "data": {setting_name: new_val}}
+        
+    return new_val
+
+async def get_filters(chat_id):
+    current_time = time.time()
+    if chat_id in _filters_cache and current_time - _filters_cache[chat_id]["time"] < 300:
+        return _filters_cache[chat_id]["data"]
+        
+    result = await execute_query("SELECT word FROM filters WHERE chat_id=?", (chat_id,), fetch=True)
+    data = [row["word"] for row in result] if result else []
+    _filters_cache[chat_id] = {"time": current_time, "data": data}
+    return data
+
+async def add_filter(chat_id, word):
+    await execute_query("INSERT OR IGNORE INTO filters (chat_id, word) VALUES (?, ?)", (chat_id, word.lower()))
+    if _db_conn:
+        await _db_conn.commit()
+    if chat_id in _filters_cache: 
+        del _filters_cache[chat_id]
+
+async def is_user_banned(user_id, chat_id):
+    result = await execute_query("SELECT is_banned FROM users WHERE user_id=? AND chat_id=?", (user_id, chat_id), fetch=True)
+    return bool(result and result[0]["is_banned"])
+
+async def ban_user(user_id, chat_id):
+    await execute_query("INSERT OR REPLACE INTO users (user_id, chat_id, is_banned) VALUES (?, ?, 1)", (user_id, chat_id))
+    if _db_conn:
+        await _db_conn.commit()
+
+async def add_warning(user_id, chat_id, reason):
+    await execute_query("INSERT INTO warnings (chat_id, user_id, reason) VALUES (?, ?, ?)", (chat_id, user_id, reason))
+    if _db_conn:
+        await _db_conn.commit()
+
+async def get_warnings_count(user_id, chat_id):
+    result = await execute_query("SELECT COUNT(*) as count FROM warnings WHERE user_id=? AND chat_id=?", (user_id, chat_id), fetch=True)
+    return result[0]["count"] if result else 0
+
+async def set_welcome(chat_id, text):
+    await ensure_group_exists(chat_id)
+    await execute_query("UPDATE groups SET welcome=? WHERE chat_id=?", (text, chat_id))
+    if _db_conn:
+        await _db_conn.commit()
+
+async def get_welcome(chat_id):
+    await ensure_group_exists(chat_id)
+    row = await execute_query("SELECT welcome FROM groups WHERE chat_id=?", (chat_id,), fetch=True)
+    if row and row[0]["welcome"]:
+        return row[0]["welcome"]
+    return None
+
+async def set_rules(chat_id, text):
+    await ensure_group_exists(chat_id)
+    await execute_query("UPDATE groups SET rules=? WHERE chat_id=?", (text, chat_id))
+    if _db_conn:
+        await _db_conn.commit()
+
+async def get_rules(chat_id):
+    await ensure_group_exists(chat_id)
+    row = await execute_query("SELECT rules FROM groups WHERE chat_id=?", (chat_id,), fetch=True)
+    if row and row[0]["rules"]:
+        return row[0]["rules"]
+    return None
+
+async def is_group_premium(chat_id):
+    await ensure_group_exists(chat_id)
+    row = await execute_query("SELECT is_premium FROM groups WHERE chat_id=?", (chat_id,), fetch=True)
+    return bool(row and row[0]["is_premium"])
+
+async def set_group_premium(chat_id, status):
+    await ensure_group_exists(chat_id)
+    await execute_query("UPDATE groups SET is_premium=? WHERE chat_id=?", (1 if status else 0, chat_id))
+    if _db_conn:
+        await _db_conn.commit()
+
+async def get_filter_count(chat_id):
+    row = await execute_query("SELECT COUNT(*) as count FROM filters WHERE chat_id=?", (chat_id,), fetch=True)
+    return row[0]["count"] if row else 0
+
+async def is_antilink_enabled(chat_id):
+    await ensure_group_exists(chat_id)
+    row = await execute_query("SELECT antilink FROM groups WHERE chat_id=?", (chat_id,), fetch=True)
+    if row and row[0]["antilink"] is not None:
+        return bool(row[0]["antilink"])
+    return True
+
+async def set_antilink(chat_id, enabled):
+    await ensure_group_exists(chat_id)
+    await execute_query("UPDATE groups SET antilink=? WHERE chat_id=?", (1 if enabled else 0, chat_id))
+    if _db_conn:
+        await _db_conn.commit()
+
+async def increment_message_count(chat_id):
+    await ensure_group_exists(chat_id)
+    await execute_query("UPDATE groups SET total_messages = COALESCE(total_messages, 0) + 1 WHERE chat_id=?", (chat_id,))
+
+async def get_message_count(chat_id):
+    row = await execute_query("SELECT total_messages FROM groups WHERE chat_id=?", (chat_id,), fetch=True)
+    return row[0]["total_messages"] if row and row[0]["total_messages"] is not None else 0
+
+async def mute_user(user_id, chat_id, duration_seconds):
+    muted_until = int(time.time()) + duration_seconds
+    await execute_query("INSERT OR REPLACE INTO users (user_id, chat_id, is_banned, muted_until) VALUES (?, ?, 0, ?)", (user_id, chat_id, muted_until))
+    if _db_conn:
+        await _db_conn.commit()
+
+async def unmute_user(user_id, chat_id):
+    await execute_query("UPDATE users SET muted_until=0 WHERE user_id=? AND chat_id=?", (user_id, chat_id))
+    if _db_conn:
+        await _db_conn.commit()
+
+async def is_user_muted(user_id, chat_id):
+    row = await execute_query("SELECT muted_until FROM users WHERE user_id=? AND chat_id=?", (user_id, chat_id), fetch=True)
+    if row and row[0]["muted_until"] and int(row[0]["muted_until"]) > int(time.time()):
+        return True
+    return False
+
+async def add_mod_log(chat_id, admin_id, action, target_id, reason):
+    await execute_query(
+        "INSERT INTO moderation_logs (chat_id, admin_id, action, target_id, reason) VALUES (?, ?, ?, ?, ?)",
+        (chat_id, admin_id, action, target_id, reason)
+    )
+    if _db_conn:
+        await _db_conn.commit()
+
+async def get_mod_logs(chat_id, limit=5):
+    rows = await execute_query("SELECT * FROM moderation_logs WHERE chat_id=? ORDER BY date DESC LIMIT ?", (chat_id, limit), fetch=True)
+    return rows
+
+
+async def get_bot_global_stats():
+    """Ú¯Ø±ÙØªÙ† Ø¢Ù…Ø§Ø± Ú©Ù„ÛŒ Ø±Ø¨Ø§Øª Ø¨Ø±Ø§ÛŒ Ù…Ø§Ù„Ú©"""
+    total_groups = await execute_query("SELECT COUNT(*) as count FROM groups", fetch=True)
+    total_users = await execute_query("SELECT COUNT(*) as count FROM user_stats", fetch=True)
+    
+    g_count = total_groups[0]["count"] if total_groups else 0
+    u_count = total_users[0]["count"] if total_users else 0
+    
+    return g_count, u_count
+
+
+===== services\permission_service.py =====
+
+# services/permission_service.py
+import logging
+from config import ADMIN_ID
+from core.api_client import get_chat_member
+
+GROUP_ADMIN_STATUSES = {"administrator", "creator", "owner"}
+OWNER_USERNAME = "Iambrrr"
+
+
+def is_super_admin(user_id, username=None) -> bool:
+    """Check whether the user is the bot owner."""
+
+    if ADMIN_ID != 0 and int(user_id) == ADMIN_ID:
+        return True
+
+    if username:
+        clean_username = username.lower().lstrip("@")
+
+        if clean_username == OWNER_USERNAME.lower().lstrip("@"):
+            return True
+
+    return False
+
+async def is_group_admin(chat_id, user_id) -> bool:
+    if is_super_admin(user_id):
+        return True
+
+    result = await get_chat_member(chat_id, user_id)
+    if not result or not result.get("ok"):
+        logging.error(f"getChatMember failed for chat={chat_id} user={user_id}: {result}")
+        return False
+
+    status = result.get("result", {}).get("status", "")
+    return status in GROUP_ADMIN_STATUSES
+
+
+===== services\xp_service.py =====
+
+# services/xp_service.py
+import time
+from core.database import execute_query
+
+async def add_xp(user_id, chat_id, amount=5):
+    """Add XP with a 30-second anti-spam cooldown."""
+    current_time = int(time.time())
+
+    row = await execute_query(
+        "SELECT last_xp_time, xp, level "
+        "FROM user_stats "
+        "WHERE user_id=? AND chat_id=?",
+        (user_id, chat_id),
+        fetch=True
+    )
+
+    if row:
+        last_time = row[0]["last_xp_time"]
+        xp = row[0]["xp"] or 0
+        level = row[0]["level"] or 1
+
+        # If there is no previous XP timestamp,
+        # treat this as the first XP award.
+        if last_time is not None:
+            if current_time - last_time < 30:
+                return False
+
+        new_xp = xp + amount
+        new_level = (new_xp // 100) + 1
+
+        await execute_query(
+            "UPDATE user_stats "
+            "SET xp=?, level=?, last_xp_time=? "
+            "WHERE user_id=? AND chat_id=?",
+            (new_xp, new_level, current_time, user_id, chat_id)
+        )
+
+        return new_level > level
+
+    await execute_query(
+        "INSERT INTO user_stats "
+        "(user_id, chat_id, xp, level, last_xp_time) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (user_id, chat_id, amount, 1, current_time)
+    )
+
+    return False
+async def get_user_stats(user_id, chat_id):
+    row = await execute_query("SELECT xp, level FROM user_stats WHERE user_id=? AND chat_id=?", (user_id, chat_id), fetch=True)
+    if row:
+        return {"xp": row[0]["xp"], "level": row[0]["level"]}
+    return {"xp": 0, "level": 1}
+
+async def get_top_users(chat_id, limit=5):
+    rows = await execute_query("SELECT user_id, xp, level FROM user_stats WHERE chat_id=? ORDER BY xp DESC LIMIT ?", (chat_id, limit), fetch=True)
+    return rows
+
+
