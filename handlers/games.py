@@ -95,3 +95,65 @@ async def handle_rps(chat_id):
 async def handle_guess(chat_id):
     """بازی حدس عدد"""
     await send_message(chat_id, "🎯 <b>حدس عدد</b>\n\nاین بخش به‌زودی اضافه خواهد شد!")
+
+import time
+from services.xp_service import add_xp
+
+active_guesses = {}
+GUESS_TTL = 120  # بازی بعد از ۲ دقیقه خودکار لغو میشه
+
+async def start_guess(chat_id, user_id):
+    """شروع بازی حدس عدد"""
+    # اگه کاربر داره بازی میکنه، نذار دوباره شروع کنه
+    if user_id in active_guesses and active_guesses[user_id]["chat_id"] == chat_id:
+        await send_message(chat_id, "⏳ شما در حال بازی هستید! فقط عدد رو بفرستید.")
+        return
+        
+    target = random.randint(1, 100)
+    active_guesses[user_id] = {
+        "chat_id": chat_id,
+        "target": target,
+        "attempts_left": 7,
+        "expires_at": time.time() + GUESS_TTL
+    }
+    
+    text = (
+        "🎯 <b>بازی حدس عدد شروع شد!</b>\n\n"
+        "من یک عدد بین <b>۱ تا ۱۰۰</b> در نظر گرفتم.\n"
+        "شما <b>۷ فرصت</b> دارید تا اون رو حدس بزنید.\n\n"
+        "✏️ فقط کافیه عدد مورد نظرتون رو همینجا بفرستید!\n"
+        "<i>(فرصت‌ها: ۷ از ۷)</i>"
+    )
+    await send_message(chat_id, text)
+
+async def check_guess(chat_id, user_id, guess):
+    """بررسی عدد ارسال شده کاربر در حین بازی"""
+    # اگه کاربر بازی نکرده باشه None برمیگرده تا پیام عادی 처리 بشه
+    if user_id not in active_guesses or active_guesses[user_id]["chat_id"] != chat_id:
+        return None
+        
+    game = active_guesses[user_id]
+    
+    # بررسی زمان انقضای بازی
+    if time.time() > game["expires_at"]:
+        del active_guesses[user_id]
+        return "⌛ زمان بازی به پایان رسید! بازی لغو شد."
+        
+    target = game["target"]
+    game["attempts_left"] -= 1
+    attempts_left = game["attempts_left"]
+    
+    # اگه درست حدس زد
+    if guess == target:
+        del active_guesses[user_id]
+        await add_xp(user_id, chat_id, 30)
+        return f"🎉 <b>آفرین! درست حدس زدی!</b>\nعدد من <b>{target}</b> بود.\n+30 XP به شما اضافه شد."
+        
+    # اگه فرصت‌ها تموم شد
+    if attempts_left == 0:
+        del active_guesses[user_id]
+        return f"😢 <b>باختی!</b>\nفرصت‌هات تموم شد.\nعدد من <b>{target}</b> بود."
+        
+    # راهنمایی (بزرگ‌تر یا کوچیک‌تر)
+    hint = "⬆️ عدد من بزرگ‌تره!" if guess < target else "⬇️ عدد من کوچیک‌تره!"
+    return f"{hint}\n\n<i>(فرصت‌های باقیمانده: {attempts_left})</i>"

@@ -53,6 +53,7 @@ async def process_message(message):
     text = message.get("text", "")
     user_id = message["from"]["id"]
     first_name = message["from"].get("first_name", "Ú©Ø§Ø±Ø¨Ø±")
+    chat_type = message.get("chat", {}).get("type")
 
     # Ø¹Ø¶Ùˆ Ø¬Ø¯ÛŒØ¯
     if "new_chat_members" in message:
@@ -85,16 +86,19 @@ async def process_message(message):
     if not text.startswith("/") and text not in MENU_BUTTON_TEXTS:
         leveled_up = await add_xp(user_id, chat_id, 5)
         await increment_message_count(chat_id)
-        await track_user(chat_id, user_id, first_name)
+        username = message["from"].get("username", "") # <-- Ø§ÛŒÙ† Ø®Ø· Ø§Ø¶Ø§ÙÙ‡ Ø´Ø¯
+        await track_user(chat_id, user_id, first_name, username)
         
         # Ù¾ÛŒØ§Ù… Ø³Ø·Ø­â€ŒØ¢Ù¾
         if leveled_up:
             stats = await get_user_stats(user_id, chat_id)
-            await send_message(
-                chat_id, 
-                f"ðŸŽ‰ ØªØ¨Ø±ÛŒÚ© <b>{first_name}</b>!\n"
-                f"Ø´Ù…Ø§ Ø¨Ù‡ <b>Level {stats['level']}</b> Ø±Ø³ÛŒØ¯ÛŒØ¯! ðŸš€"
-            )
+            # Ø§Ø±Ø³Ø§Ù„ Ù¾ÛŒØ§Ù… Ø³Ø·Ø­â€ŒØ¢Ù¾ ÙÙ‚Ø· Ø¯Ø± Ù¾ÛŒâ€ŒÙˆÛŒ (PV) Ø¨Ø±Ø§ÛŒ Ø¬Ù„ÙˆÚ¯ÛŒØ±ÛŒ Ø§Ø² Ø§Ø³Ù¾Ù… Ø¯Ø± Ú¯Ø±ÙˆÙ‡
+            if chat_type == "private":
+                await send_message(
+                    chat_id, 
+                    f"ðŸŽ‰ ØªØ¨Ø±ÛŒÚ© <b>{first_name}</b>!\n"
+                    f"Ø´Ù…Ø§ Ø¨Ù‡ <b>Level {stats['level']}</b> Ø±Ø³ÛŒØ¯ÛŒØ¯! ðŸš€"
+                )
 
     # Ù‡Ø¯Ø§ÛŒØª Ø¨Ù‡ Ù…Ø³ÛŒØ±ÛŒØ§Ø¨
     await route_message(message)
@@ -353,6 +357,7 @@ async def init_db():
             daily_streak INTEGER DEFAULT 0,
             last_work TIMESTAMP DEFAULT 0,
             last_rob TIMESTAMP DEFAULT 0,
+            username TEXT,
             PRIMARY KEY (user_id, chat_id)
         );
         
@@ -389,8 +394,21 @@ async def init_db():
         );
     ''')
     
+    # Ø§Ø¶Ø§ÙÙ‡ Ú©Ø±Ø¯Ù† Ø³ØªÙˆÙ† ÛŒÙˆØ²Ø±Ù†ÛŒÙ… Ø¨Ø±Ø§ÛŒ Ø¯ÛŒØªØ§Ø¨ÛŒØ³â€ŒÙ‡Ø§ÛŒ Ù‚Ø¯ÛŒÙ…ÛŒ
+    await _add_column_if_missing("user_stats", "username", "TEXT")
+    await _add_column_if_missing("groups", "module_games", "BOOLEAN DEFAULT 1")
+    await _add_column_if_missing("groups", "module_economy", "BOOLEAN DEFAULT 1")
+    
     await _db_conn.commit()
     logging.info("Database initialized successfully")
+
+async def _add_column_if_missing(table, column, definition):
+    """ALTER TABLE Ø§Ù…Ù†: Ø§Ú¯Ø± Ø³ØªÙˆÙ† ÙˆØ¬ÙˆØ¯ Ù†Ø¯Ø§Ø´Øª Ø§Ø¶Ø§ÙÙ‡ Ù…ÛŒÚ©Ù†Ø¯."""
+    try:
+        await _db_conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+    except sqlite3.OperationalError as e:
+        if "duplicate column" not in str(e).lower():
+            logging.error(f"Unexpected error adding column {column} to {table}: {e}")
 
 async def execute_query(query, params=(), fetch=False):
     if not _db_conn: 
@@ -455,6 +473,7 @@ def normalize_text(text: str) -> str:
 import re
 from core.api_client import send_message, join_chat, get_chat_member_count
 from services.permission_service import is_group_admin, is_super_admin
+from services.group_service import get_group_settings
 
 from handlers.base import (
     handle_start, handle_help, handle_profile, handle_leaderboard,
@@ -463,29 +482,22 @@ from handlers.base import (
 )
 from handlers.admin import (
     handle_admin_panel, handle_set_welcome, handle_set_rules, handle_rules, 
-    handle_set_premium, handle_group_stats, handle_premium_info, handle_install
+    handle_set_premium, handle_group_stats, handle_premium_info, handle_install, 
+    handle_bot_stats
 )
 from handlers.moderation import (
     handle_warn, handle_ban, handle_filter, handle_set_antilink,
     handle_mute, handle_unmute, handle_logs, handle_kick, handle_end_vote
 )
 from handlers.fun import handle_who, handle_vote, handle_truth, handle_dare
-from handlers.games import handle_trivia, handle_rps, handle_guess
+from handlers.games import handle_trivia, handle_rps, handle_guess, start_guess, check_guess
 from handlers.ai import handle_ask, handle_suggest, handle_challenge, handle_direct_chat
 from handlers.economy import (
     handle_balance, handle_daily, handle_coinflip, 
     handle_work, handle_rob, handle_give, handle_shop, handle_buy
 )
 from config import MIN_GROUP_MEMBERS
-# core/router.py
-import re
-from core.api_client import send_message, join_chat, get_chat_member_count
-from services.permission_service import is_group_admin, is_super_admin
-from handlers.admin import (
-    handle_admin_panel, handle_set_welcome, handle_set_rules, handle_rules, 
-    handle_set_premium, handle_group_stats, handle_premium_info, handle_install, 
-    handle_bot_stats  # <--- Ø§ÛŒÙ† Ø±Ùˆ Ø§Ø¶Ø§ÙÙ‡ Ú©Ù†
-)
+
 async def route_message(message):
     chat_id = message["chat"]["id"]
     chat_type = message["chat"]["type"]  # private, group, supergroup
@@ -494,6 +506,17 @@ async def route_message(message):
     first_name = message["from"].get("first_name", "Ú©Ø§Ø±Ø¨Ø±")
     username = message["from"].get("username", "")
     reply_to_message = message.get("reply_to_message")
+    
+    # Ø®ÙˆØ§Ù†Ø¯Ù† ØªÙ†Ø¸ÛŒÙ…Ø§Øª Ù…Ø§Ú˜ÙˆÙ„â€ŒÙ‡Ø§ Ø§Ø² Ø¯ÛŒØªØ§Ø¨ÛŒØ³ (Ø¨Ø±Ø§ÛŒ Ú¯Ø±ÙˆÙ‡â€ŒÙ‡Ø§)
+    settings = await get_group_settings(chat_id) if chat_type != "private" else {}
+    
+    # --- Ù‡Ù†Ø¯Ù„ Ú©Ø±Ø¯Ù† Ø¨Ø§Ø²ÛŒ Ø­Ø¯Ø³ Ø¹Ø¯Ø¯ ---
+    if text.isdigit():
+        result = await check_guess(chat_id, user_id, int(text))
+        if result:
+            await send_message(chat_id, result)
+            return
+    # -----------------------------
     
     # Û±. Ù„ÛŒÙ†Ú© Ø¬ÙˆÛŒÙ† Ú¯Ø±ÙˆÙ‡ Ø¯Ø± Ù¾ÛŒÙˆÛŒ
     if chat_type == "private":
@@ -562,31 +585,26 @@ async def route_message(message):
     if text == "/challenge":
         await handle_challenge(chat_id, user_id); return
 
-    # Û´. Ø¯Ú©Ù…Ù‡â€ŒÙ‡Ø§ÛŒ Ú¯Ø±ÙˆÙ‡ÛŒ (ReplyKeyboardMarkup)
+    # Û´. Ø¯Ú©Ù…Ù‡â€ŒÙ‡Ø§ÛŒ Ú¯Ø±ÙˆÙ‡ÛŒ (Ø¨Ø±Ø±Ø³ÛŒ Ù…Ø§Ú˜ÙˆÙ„â€ŒÙ‡Ø§)
     if chat_type in ["group", "supergroup"]:
-        if text == "ðŸ§  Ø³ÙˆØ§Ù„ Ø¹Ù…ÙˆÙ…ÛŒ":
-            await handle_trivia(chat_id); return
-        elif text == "âœ‚ï¸ Ø³Ù†Ú¯ Ú©Ø§ØºØ° Ù‚ÛŒÚ†ÛŒ":
-            await handle_rps(chat_id); return
-        elif text == "ðŸŽ¯ Ø­Ø¯Ø³ Ø¹Ø¯Ø¯":
-            await handle_guess(chat_id); return
-        elif text == "ðŸŽ¯ Ø§Ù†ØªØ®Ø§Ø¨ ØªØµØ§Ø¯ÙÛŒ":
-            await handle_who(chat_id); return
-        elif text == "ðŸ¤” Ø­Ù‚ÛŒÙ‚Øª":
-            await handle_truth(chat_id); return
-        elif text == "ðŸ”¥ Ø¬Ø±Ø¦Øª":
-            await handle_dare(chat_id); return
-        elif text == "ðŸ’° Ù…ÙˆØ¬ÙˆØ¯ÛŒ":
-            await handle_balance(chat_id, user_id, first_name); return
-        elif text == "ðŸŽ Ø±ÙˆØ²Ø§Ù†Ù‡":
-            await handle_daily(chat_id, user_id, first_name); return
-        elif text == "ðŸ’¼ Ú©Ø§Ø±":
-            await handle_work(chat_id, user_id, first_name); return
-        elif text == "ðŸª™ Ø´ÛŒØ± ÛŒØ§ Ø®Ø·":
-            await send_message(chat_id, "âŒ Ø§Ø³ØªÙØ§Ø¯Ù‡: /coinflip [Ø´ÛŒØ±/Ø®Ø·] [Ù…Ø¨Ù„Øº]"); return
-        elif text == "ðŸª ÙØ±ÙˆØ´Ú¯Ø§Ù‡":
-            await handle_shop(chat_id); return
-        elif text == "ðŸ”™ Ø¨Ø§Ø²Ú¯Ø´Øª":
+        # Ø¯Ú©Ù…Ù‡â€ŒÙ‡Ø§ÛŒ Ø¨Ø®Ø´ Ø¨Ø§Ø²ÛŒâ€ŒÙ‡Ø§ (ÙÙ‚Ø· Ø§Ú¯Ø± Ù…Ø§Ú˜ÙˆÙ„ Ø¨Ø§Ø²ÛŒâ€ŒÙ‡Ø§ Ø±ÙˆØ´Ù† Ø¨Ø§Ø´Ù‡)
+        if settings.get("module_games", 1):
+            if text == "ðŸ§  Ø³ÙˆØ§Ù„ Ø¹Ù…ÙˆÙ…ÛŒ": await handle_trivia(chat_id); return
+            elif text == "âœ‚ï¸ Ø³Ù†Ú¯ Ú©Ø§ØºØ° Ù‚ÛŒÚ†ÛŒ": await handle_rps(chat_id); return
+            elif text == "ðŸŽ¯ Ø­Ø¯Ø³ Ø¹Ø¯Ø¯": await start_guess(chat_id, user_id); return
+            elif text == "ðŸŽ¯ Ø§Ù†ØªØ®Ø§Ø¨ ØªØµØ§Ø¯ÙÛŒ": await handle_who(chat_id); return
+            elif text == "ðŸ¤” Ø­Ù‚ÛŒÙ‚Øª": await handle_truth(chat_id); return
+            elif text == "ðŸ”¥ Ø¬Ø±Ø¦Øª": await handle_dare(chat_id); return
+        
+        # Ø¯Ú©Ù…Ù‡â€ŒÙ‡Ø§ÛŒ Ø¨Ø®Ø´ Ø§Ù‚ØªØµØ§Ø¯ (ÙÙ‚Ø· Ø§Ú¯Ø± Ù…Ø§Ú˜ÙˆÙ„ Ø§Ù‚ØªØµØ§Ø¯ Ø±ÙˆØ´Ù† Ø¨Ø§Ø´Ù‡)
+        if settings.get("module_economy", 1):
+            if text == "ðŸ’° Ù…ÙˆØ¬ÙˆØ¯ÛŒ": await handle_balance(chat_id, user_id, first_name); return
+            elif text == "ðŸŽ Ø±ÙˆØ²Ø§Ù†Ù‡": await handle_daily(chat_id, user_id, first_name); return
+            elif text == "ðŸ’¼ Ú©Ø§Ø±": await handle_work(chat_id, user_id, first_name); return
+            elif text == "ðŸª™ Ø´ÛŒØ± ÛŒØ§ Ø®Ø·": await send_message(chat_id, "âŒ Ø§Ø³ØªÙØ§Ø¯Ù‡: /coinflip [Ø´ÛŒØ±/Ø®Ø·] [Ù…Ø¨Ù„Øº]"); return
+            elif text == "ðŸª ÙØ±ÙˆØ´Ú¯Ø§Ù‡": await handle_shop(chat_id); return
+            
+        if text == "ðŸ”™ Ø¨Ø§Ø²Ú¯Ø´Øª":
             await send_message(chat_id, "ðŸ”™ Ø¨Ù‡ Ù…Ù†ÙˆÛŒ Ø§ØµÙ„ÛŒ Ø¨Ø±Ú¯Ø´ØªÛŒØ¯.", reply_markup=get_main_menu_keyboard())
             return
 
@@ -653,17 +671,18 @@ async def route_message(message):
 
     # Û¹. Ø¯Ø³ØªÙˆØ±Ø§Øª Ù…Ø§Ù„Ú© Ø±Ø¨Ø§Øª (Ø³ÙˆÙ¾Ø± Ø§Ø¯Ù…ÛŒÙ†)
     if text.startswith("/setpremium"):
-        if is_super_admin(user_id, username):  # <-- username Ø§Ø¶Ø§ÙÙ‡ Ø´Ø¯
+        if is_super_admin(user_id, username): 
             await handle_set_premium(chat_id, text, user_id, username)
         else:
             await send_message(chat_id, "â›” Ø§ÛŒÙ† Ø¯Ø³ØªÙˆØ± ÙÙ‚Ø· Ø¨Ø±Ø§ÛŒ Ù…Ø§Ù„Ú© Ø±Ø¨Ø§Øª Ø¯Ø± Ø¯Ø³ØªØ±Ø³ Ø§Ø³Øª.")
         return
 
-    # Û±Û°. Ø¯Ø³ØªÙˆØ±Ø§Øª Ù†ÛŒØ§Ø²Ù…Ù†Ø¯ Ø±ÛŒÙ¾Ù„Ø§ÛŒ
-    if text.startswith("/rob"):
-        await handle_rob(chat_id, message, user_id, first_name); return
-    if text.startswith("/give"):
-        await handle_give(chat_id, message, text, user_id, first_name); return
+    # Û±Û°. Ø¯Ø³ØªÙˆØ±Ø§Øª Ù†ÛŒØ§Ø²Ù…Ù†Ø¯ Ø±ÛŒÙ¾Ù„Ø§ÛŒ (Ø¨Ø±Ø±Ø³ÛŒ Ù…Ø§Ú˜ÙˆÙ„ Ø§Ù‚ØªØµØ§Ø¯)
+    if settings.get("module_economy", 1) or chat_type == "private":
+        if text.startswith("/rob"):
+            await handle_rob(chat_id, message, user_id, first_name); return
+        if text.startswith("/give"):
+            await handle_give(chat_id, message, text, user_id, first_name); return
 
     # Û±Û±. Ø¯Ø³ØªÙˆØ±Ø§Øª Ø¹Ø§Ø¯ÛŒ Ú©Ø§Ø±Ø¨Ø±Ø§Ù†
     if text.startswith("/start"):
@@ -676,34 +695,30 @@ async def route_message(message):
         await handle_who(chat_id); return
     if text.startswith("/vote"):
         await handle_vote(chat_id, text, user_id, first_name); return
-    if text == "/truth":
-        await handle_truth(chat_id); return
-    if text == "/dare":
-        await handle_dare(chat_id); return
-    if text == "/trivia":
-        await handle_trivia(chat_id); return
+        
+    # Ø¯Ø³ØªÙˆØ±Ø§Øª Ø¨Ø§Ø²ÛŒ (Ø¨Ø±Ø±Ø³ÛŒ Ù…Ø§Ú˜ÙˆÙ„ Ø¨Ø§Ø²ÛŒâ€ŒÙ‡Ø§)
+    if settings.get("module_games", 1) or chat_type == "private":
+        if text == "/truth": await handle_truth(chat_id); return
+        if text == "/dare": await handle_dare(chat_id); return
+        if text == "/trivia": await handle_trivia(chat_id); return
+
     if text == "/groupstats":
         await handle_group_stats(chat_id, user_id); return
     if text == "/premium":
         await handle_premium_info(chat_id); return
         
-    # Û±Û². Ø¯Ø³ØªÙˆØ±Ø§Øª Ø§Ù‚ØªØµØ§Ø¯
-    if text == "/balance":
-        await handle_balance(chat_id, user_id, first_name); return
-    if text == "/daily":
-        await handle_daily(chat_id, user_id, first_name); return
-    if text.startswith("/coinflip"):
-        await handle_coinflip(chat_id, text, user_id, first_name); return
-    if text == "/work":
-        await handle_work(chat_id, user_id, first_name); return
-    if text == "/shop":
-        await handle_shop(chat_id); return
-    if text.startswith("/buy"):
-        await handle_buy(chat_id, text, user_id, first_name); return
+    # Û±Û². Ø¯Ø³ØªÙˆØ±Ø§Øª Ø§Ù‚ØªØµØ§Ø¯ (Ø¨Ø±Ø±Ø³ÛŒ Ù…Ø§Ú˜ÙˆÙ„ Ø§Ù‚ØªØµØ§Ø¯)
+    if settings.get("module_economy", 1) or chat_type == "private":
+        if text == "/balance": await handle_balance(chat_id, user_id, first_name); return
+        if text == "/daily": await handle_daily(chat_id, user_id, first_name); return
+        if text.startswith("/coinflip"): await handle_coinflip(chat_id, text, user_id, first_name); return
+        if text == "/work": await handle_work(chat_id, user_id, first_name); return
+        if text == "/shop": await handle_shop(chat_id); return
+        if text.startswith("/buy"): await handle_buy(chat_id, text, user_id, first_name); return
         
     # --- Ø¯Ø³ØªÙˆØ± Ù…Ø´Ø§Ù‡Ø¯Ù‡ Ø¢Ù…Ø§Ø± Ø±Ø¨Ø§Øª ---
     if text == "/botstats":
-        if is_super_admin(user_id, username):  # <-- username Ø§Ø¶Ø§ÙÙ‡ Ø´Ø¯
+        if is_super_admin(user_id, username):  
             await handle_bot_stats(chat_id, user_id)
         else:
             await send_message(chat_id, "â›” Ø§ÛŒÙ† Ø¯Ø³ØªÙˆØ± ÙÙ‚Ø· Ø¨Ø±Ø§ÛŒ Ù…Ø§Ù„Ú© Ø±Ø¨Ø§Øª Ø¯Ø± Ø¯Ø³ØªØ±Ø³ Ø§Ø³Øª.")
@@ -739,7 +754,8 @@ def get_admin_panel_keyboard(settings):
             [status_btn("lock_links", "ðŸ”— Ù‚ÙÙ„ Ù„ÛŒÙ†Ú©"), status_btn("lock_photos", "ðŸ–¼ Ù‚ÙÙ„ Ø¹Ú©Ø³")],
             [status_btn("lock_videos", "ðŸŽ¬ Ù‚ÙÙ„ ÙˆÛŒØ¯ÛŒÙˆ"), status_btn("lock_stickers", "ðŸ· Ù‚ÙÙ„ Ø§Ø³ØªÛŒÚ©Ø±")],
             [status_btn("lock_forward", "ðŸ“¤ Ù‚ÙÙ„ ÙÙˆØ±ÙˆØ§Ø±Ø¯")],
-            [{"text": "ðŸ”™ Ø¨Ø§Ø²Ú¯Ø´Øª Ø¨Ù‡ Ù…Ù†ÙˆÛŒ Ø§ØµÙ„ÛŒ", "callback_data": "main_menu"}]
+            [status_btn("module_games", "ðŸŽ® ÙØ¹Ø§Ù„Ø³Ø§Ø²ÛŒ Ø¨Ø§Ø²ÛŒâ€ŒÙ‡Ø§"), status_btn("module_economy", "ðŸ’° ÙØ¹Ø§Ù„Ø³Ø§Ø²ÛŒ Ø§Ù‚ØªØµØ§Ø¯")],
+            [{"text": "â†©ï¸ Ø¨Ø§Ø²Ú¯Ø´Øª Ø¨Ù‡ Ù…Ù†ÙˆÛŒ Ø§ØµÙ„ÛŒ", "callback_data": "main_menu"}]
         ]
     }
 
@@ -846,7 +862,7 @@ async def handle_set_premium(chat_id, text, user_id, username=None):
             chat_id,
             "â¬‡ï¸ Ø§ÛŒÙ† Ú¯Ø±ÙˆÙ‡ Ø¨Ù‡ Ù†Ø³Ø®Ù‡ Ø±Ø§ÛŒÚ¯Ø§Ù† Ø¨Ø±Ú¯Ø´Øª."
         )
-        
+
 async def handle_group_stats(chat_id, user_id):
     if not await is_group_admin(chat_id, user_id):
         await send_message(chat_id, NO_PERMISSION_TEXT)
@@ -904,17 +920,38 @@ async def handle_install(chat_id, user_id):
     await send_message(chat_id, text)
 
 async def handle_bot_stats(chat_id, user_id):
-    if not is_super_admin(user_id):
-        return
-        
+    # Ú†ÙˆÙ† Ø§ÛŒÙ† Ø¯Ø³ØªÙˆØ± Ù‚Ø¨Ù„Ø§Ù‹ Ø¯Ø± router.py Ú†Ú© Ø´Ø¯Ù‡ Ú©Ù‡ Ø´Ù…Ø§ Ø§ÙˆÙ†Ø± Ù‡Ø³ØªÛŒØ¯ØŒ Ø§ÛŒÙ†Ø¬Ø§ Ø¯ÛŒÚ¯Ù‡ Ú†Ú© Ù†Ù…ÛŒÚ©Ù†ÛŒÙ…
+    
     from services.group_service import get_bot_global_stats
-    total_groups, total_users = await get_bot_global_stats()
+    groups, users = await get_bot_global_stats()
     
     text = (
         "ðŸ“Š <b>Ø¢Ù…Ø§Ø± Ú©Ù„ÛŒ Ø±Ø¨Ø§Øª Ø´Ù…Ø§</b>\n\n"
-        f"ðŸ‘¥ ØªØ¹Ø¯Ø§Ø¯ Ú©Ù„ Ú¯Ø±ÙˆÙ‡â€ŒÙ‡Ø§ÛŒ Ù…ØªØµÙ„: <b>{total_groups}</b>\n"
-        f"ðŸ‘¤ ØªØ¹Ø¯Ø§Ø¯ Ú©Ù„ Ú©Ø§Ø±Ø¨Ø±Ø§Ù† Ø«Ø¨Øª Ø´Ø¯Ù‡: <b>{total_users}</b>\n"
+        f"ðŸ‘¥ ØªØ¹Ø¯Ø§Ø¯ Ú©Ù„ Ú¯Ø±ÙˆÙ‡â€ŒÙ‡Ø§ÛŒ Ù…ØªØµÙ„: <b>{len(groups)}</b>\n"
+        f"ðŸ‘¤ ØªØ¹Ø¯Ø§Ø¯ Ú©Ù„ Ú©Ø§Ø±Ø¨Ø±Ø§Ù† Ø«Ø¨Øª Ø´Ø¯Ù‡: <b>{len(users)}</b>\n\n"
     )
+    
+    # Ù†Ù…Ø§ÛŒØ´ Ù„ÛŒØ³Øª Ú¯Ø±ÙˆÙ‡â€ŒÙ‡Ø§ (ÙÙ‚Ø· ÛµÛ° Ú¯Ø±ÙˆÙ‡ Ø§ÙˆÙ„)
+    text += "<b>ðŸ“‹ Ù„ÛŒØ³Øª Ú¯Ø±ÙˆÙ‡â€ŒÙ‡Ø§ (Ø¢ÛŒØ¯ÛŒâ€ŒÙ‡Ø§):</b>\n"
+    for g in groups[:50]:
+        text += f"â€¢ <code>{g['chat_id']}</code>\n"
+        
+    # Ù†Ù…Ø§ÛŒØ´ Ù„ÛŒØ³Øª Ú©Ø§Ø±Ø¨Ø±Ø§Ù† (Ù„ÛŒÙ†Ú©â€ŒØ¯Ø§Ø± Ø¨Ø± Ø§Ø³Ø§Ø³ ÛŒÙˆØ²Ø±Ù†ÛŒÙ… ÛŒØ§ Ø¢ÛŒØ¯ÛŒØŒ ÙÙ‚Ø· Û±Û°Û° Ú©Ø§Ø±Ø¨Ø± Ø§ÙˆÙ„)
+    text += "\n<b>ðŸ‘¤ Ù„ÛŒØ³Øª Ú©Ø§Ø±Ø¨Ø±Ø§Ù†:</b>\n"
+    for u in users[:100]:
+        user_id = u["user_id"]
+        username = u["username"] if u["username"] else None
+        
+        # Ø§Ú¯Ù‡ Ú©Ø§Ø±Ø¨Ø± ÛŒÙˆØ²Ø±Ù†ÛŒÙ… Ø¯Ø§Ø´ØªØŒ ÛŒÙˆØ²Ø±Ù†ÛŒÙ… Ø±Ùˆ Ù†Ø´ÙˆÙ† Ù…ÛŒØ¯Ù‡ØŒ Ø§Ú¯Ù‡ Ù†Ø¯Ø§Ø´Øª Ø¢ÛŒØ¯ÛŒ Ø¹Ø¯Ø¯ÛŒ Ø±Ùˆ Ù†Ø´ÙˆÙ† Ù…ÛŒØ¯Ù‡
+        display_name = f"@{username}" if username else f"{user_id}"
+        
+        # Ø³Ø§Ø®Øª Ù„ÛŒÙ†Ú© Ù‚Ø§Ø¨Ù„ Ú©Ù„ÛŒÚ© (Ø¨Ø§ Ú©Ù„ÛŒÚ© Ø±ÙˆÛŒ Ø§Ø³Ù… Ù…ÛŒØ±Ù‡ ØªÙˆ Ù¾Ø±ÙˆÙØ§ÛŒÙ„)
+        user_link = f"<a href=\"tg://user?id={user_id}\">{display_name}</a>"
+        text += f"â€¢ {user_link}\n"
+        
+    if len(users) > 100:
+        text += "\n<i>(Ø¨Ø±Ø§ÛŒ Ø¬Ù„ÙˆÚ¯ÛŒØ±ÛŒ Ø§Ø² Ø·ÙˆÙ„Ø§Ù†ÛŒ Ø´Ø¯Ù† Ù¾ÛŒØ§Ù…ØŒ ÙÙ‚Ø· Û±Û°Û° Ú©Ø§Ø±Ø¨Ø± Ø§ÙˆÙ„ Ù†Ù…Ø§ÛŒØ´ Ø¯Ø§Ø¯Ù‡ Ø´Ø¯Ù†Ø¯)</i>"
+        
     await send_message(chat_id, text)
 
 
@@ -1274,7 +1311,10 @@ async def handle_leaderboard(chat_id):
     medals = ["ðŸ¥‡", "ðŸ¥ˆ", "ðŸ¥‰", "4ï¸âƒ£", "5ï¸âƒ£"]
     
     for i, user in enumerate(top_users):
-        text += f"{medals[i]} Ú©Ø§Ø±Ø¨Ø± {user['user_id']} - Ø³Ø·Ø­ {user['level']} ({user['xp']} XP)\n"
+        # Ø³Ø§Ø®Øª Ù„ÛŒÙ†Ú© Ù‚Ø§Ø¨Ù„ Ú©Ù„ÛŒÚ© Ø¨Ø±Ø§ÛŒ Ø¢ÛŒØ¯ÛŒ Ú©Ø§Ø±Ø¨Ø±
+        # ÙˆÙ‚ØªÛŒ Ø±ÙˆØ´ Ú©Ù„ÛŒÚ© Ú©Ù†ÛŒØŒ Ù…Ø³ØªÙ‚ÛŒÙ… Ù¾Ø±ÙˆÙØ§ÛŒÙ„Ø´ Ø¨Ø§Ø² Ù…ÛŒØ´Ù‡
+        user_link = f"<a href=\"tg://user?id={user['user_id']}\">Ú©Ø§Ø±Ø¨Ø± {user['user_id']}</a>"
+        text += f"{medals[i]} {user_link} - Ø³Ø·Ø­ {user['level']} ({user['xp']} XP)\n"
         
     await send_message(chat_id, text, reply_markup=get_back_keyboard())
 
@@ -1452,9 +1492,11 @@ async def handle_callback_query(callback_query):
         await answer_callback(callback_id)
 
     elif data == "game_guess":
+        from handlers.games import start_guess
+        await start_guess(chat_id, user_id)
         await edit_message_text(
             chat_id, message_id, 
-            "ðŸŽ¯ <b>Ø­Ø¯Ø³ Ø¹Ø¯Ø¯</b>\n\nØ§ÛŒÙ† Ø¨Ø®Ø´ Ø¨Ù‡â€ŒØ²ÙˆØ¯ÛŒ Ø§Ø¶Ø§ÙÙ‡ Ø®ÙˆØ§Ù‡Ø¯ Ø´Ø¯!",
+            "ðŸŽ¯ <b>Ø¨Ø§Ø²ÛŒ Ø­Ø¯Ø³ Ø¹Ø¯Ø¯ Ø´Ø±ÙˆØ¹ Ø´Ø¯!</b>\n\nØ¨Ù‡ Ù¾ÛŒØ§Ù… Ø¨Ø§Ù„Ø§ÛŒÛŒ Ù†Ú¯Ø§Ù‡ Ú©Ù†ÛŒØ¯ Ùˆ Ø§Ø¹Ø¯Ø§Ø¯ Ø±Ùˆ Ø¨ÙØ±Ø³ØªÛŒØ¯.",
             reply_markup=get_back_keyboard("games_menu")
         )
         await answer_callback(callback_id)
@@ -1576,6 +1618,8 @@ async def handle_callback_query(callback_query):
 import random
 from core.api_client import send_message
 from services.economy_service import get_balance, add_coins, claim_daily
+# Ù…ØªÙ† ØªØ¨Ù„ÛŒØºØ§ØªÛŒ Ø´Ù…Ø§ (Ù‡Ø± Ú†Ù†Ø¯ ÙˆÙ‚Øª ÛŒÙ‡ Ø¨Ø§Ø± Ù…ÛŒØªÙˆÙ†ÛŒ Ø§ÛŒÙ† Ù…ØªÙ† Ø±Ùˆ Ø¹ÙˆØ¶ Ú©Ù†ÛŒ)
+AD_TEXT = "\n\nðŸ“¢ <i>Ø¬Ù‡Øª Ø±Ø²Ø±Ùˆ ØªØ¨Ù„ÛŒØºØ§Øª Ø¯Ø± Ø§ÛŒÙ† Ø±Ø¨Ø§Øª Ù¾ÛŒØ§Ù… Ø¯Ù‡ÛŒØ¯: @Iambrrr</i>"
 
 async def handle_balance(chat_id, user_id, first_name):
     balance = await get_balance(user_id, chat_id)
@@ -1585,6 +1629,7 @@ async def handle_balance(chat_id, user_id, first_name):
         f"ðŸ’µ Ø³Ú©Ù‡: <b>{balance}</b>\n\n"
         f"Ø¨Ø±Ø§ÛŒ Ø¯Ø±ÛŒØ§ÙØª Ø³Ú©Ù‡ Ø±Ø§ÛŒÚ¯Ø§Ù†ØŒ Ø¯Ø³ØªÙˆØ± /daily Ø±Ø§ Ø¨Ø²Ù†ÛŒØ¯!"
     )
+    text += AD_TEXT
     await send_message(chat_id, text)
 
 async def handle_daily(chat_id, user_id, first_name):
@@ -1595,13 +1640,15 @@ async def handle_daily(chat_id, user_id, first_name):
             f"ðŸŽ <b>Ù¾Ø§Ø¯Ø§Ø´ Ø±ÙˆØ²Ø§Ù†Ù‡!</b>\n\n"
             f"ðŸŽ‰ {first_name} Ø¹Ø²ÛŒØ²ØŒ Ø´Ù…Ø§ <b>{reward} Ø³Ú©Ù‡</b> Ø¯Ø±ÛŒØ§ÙØª Ú©Ø±Ø¯ÛŒØ¯! ðŸ’µ\n"
             f"ðŸ”¥ Ø§Ø³ØªØ±ÛŒÚ© Ø´Ù…Ø§: <b>{streak} Ø±ÙˆØ²</b>\n\n"
-            f"ðŸ’¡ Ù‡Ø± Ø±ÙˆØ² Ø¨Ø±Ú¯Ø±Ø¯ÛŒØ¯ ØªØ§ Ø§Ø³ØªØ±ÛŒÚ©ØªØ§Ù† Ø¨ÛŒØ´ØªØ± Ø´ÙˆØ¯ Ùˆ Ø³Ú©Ù‡â€ŒÙ‡Ø§ÛŒ Ø¨ÛŒØ´ØªØ±ÛŒ Ø¨Ú¯ÛŒØ±ÛŒØ¯!"
+            f"ðŸ’¡ Ù‡Ø± Ø±ÙˆØ² Ø¨Ø±Ú¯Ø±Ø¯ÛŒØ¯ ØªØ§ Ø§Ø³ØªØ±ÛŒÚ©â€ŒØªØ§Ù† Ø¨ÛŒØ´ØªØ± Ø´ÙˆØ¯ Ùˆ Ø³Ú©Ù‡â€ŒÙ‡Ø§ÛŒ Ø¨ÛŒØ´ØªØ±ÛŒ Ø¨Ú¯ÛŒØ±ÛŒØ¯!"
         )
     else:
         remaining_seconds = data
         hours = remaining_seconds // 3600
         minutes = (remaining_seconds % 3600) // 60
-        text = f"â³ <b>Ø´Ù…Ø§ Ø§Ù…Ø±ÙˆØ² Ù¾Ø§Ø¯Ø§Ø´ Ø®ÙˆØ¯ Ø±Ø§ Ú¯Ø±ÙØªÙ‡â€ŒØ§ÛŒØ¯!</b>\n\nØ²Ù…Ø§Ù† Ø¨Ø§Ù‚ÛŒâ€ŒÙ…Ø§Ù†Ø¯Ù‡ Ø¨Ø±Ø§ÛŒ Ù¾Ø§Ø¯Ø§Ø´ Ø¨Ø¹Ø¯ÛŒ: <b>{hours} Ø³Ø§Ø¹Øª Ùˆ {minutes} Ø¯Ù‚ÛŒÙ‚Ù‡</b>"
+        text = f"â³ <b>Ø´Ù…Ø§ Ø§Ù…Ø±ÙˆØ² Ù¾Ø§Ø¯Ø§Ø´ Ø®ÙˆØ¯ Ø±Ø§ Ú¯Ø±ÙØªÙ‡â€ŒØ§ÛŒØ¯!</b>\n\nØ²Ù…Ø§Ù† Ø¨Ø§Ù‚ÛŒÙ…Ø§Ù†Ø¯Ù‡ Ø¨Ø±Ø§ÛŒ Ù¾Ø§Ø¯Ø§Ø´ Ø¨Ø¹Ø¯ÛŒ: <b>{hours} Ø³Ø§Ø¹Øª Ùˆ {minutes} Ø¯Ù‚ÛŒÙ‚Ù‡</b>"
+    
+    text += AD_TEXT
     await send_message(chat_id, text)
 
 async def handle_coinflip(chat_id, text, user_id, first_name):
@@ -1734,10 +1781,16 @@ def _prune_expired_votes():
     for msg_id in expired_ids:
         del active_votes[msg_id]
 
-async def track_user(chat_id, user_id, first_name):
+async def track_user(chat_id, user_id, first_name, username=""):
     if chat_id not in _active_users:
         _active_users[chat_id] = {}
     _active_users[chat_id][user_id] = first_name
+    
+    # Ø°Ø®ÛŒØ±Ù‡ ÛŒÙˆØ²Ø±Ù†ÛŒÙ… Ø¯Ø± Ø¯ÛŒØªØ§Ø¨ÛŒØ³
+    if username:
+        from core.database import execute_query
+        await execute_query("INSERT OR IGNORE INTO user_stats (user_id, chat_id) VALUES (?, ?)", (user_id, chat_id))
+        await execute_query("UPDATE user_stats SET username=? WHERE user_id=? AND chat_id=?", (username, user_id, chat_id))
 
 async def handle_who(chat_id):
     users = _active_users.get(chat_id, {})
@@ -1972,6 +2025,68 @@ async def handle_guess(chat_id):
     """Ø¨Ø§Ø²ÛŒ Ø­Ø¯Ø³ Ø¹Ø¯Ø¯"""
     await send_message(chat_id, "ðŸŽ¯ <b>Ø­Ø¯Ø³ Ø¹Ø¯Ø¯</b>\n\nØ§ÛŒÙ† Ø¨Ø®Ø´ Ø¨Ù‡â€ŒØ²ÙˆØ¯ÛŒ Ø§Ø¶Ø§ÙÙ‡ Ø®ÙˆØ§Ù‡Ø¯ Ø´Ø¯!")
 
+import time
+from services.xp_service import add_xp
+
+active_guesses = {}
+GUESS_TTL = 120  # Ø¨Ø§Ø²ÛŒ Ø¨Ø¹Ø¯ Ø§Ø² Û² Ø¯Ù‚ÛŒÙ‚Ù‡ Ø®ÙˆØ¯Ú©Ø§Ø± Ù„ØºÙˆ Ù…ÛŒØ´Ù‡
+
+async def start_guess(chat_id, user_id):
+    """Ø´Ø±ÙˆØ¹ Ø¨Ø§Ø²ÛŒ Ø­Ø¯Ø³ Ø¹Ø¯Ø¯"""
+    # Ø§Ú¯Ù‡ Ú©Ø§Ø±Ø¨Ø± Ø¯Ø§Ø±Ù‡ Ø¨Ø§Ø²ÛŒ Ù…ÛŒÚ©Ù†Ù‡ØŒ Ù†Ø°Ø§Ø± Ø¯ÙˆØ¨Ø§Ø±Ù‡ Ø´Ø±ÙˆØ¹ Ú©Ù†Ù‡
+    if user_id in active_guesses and active_guesses[user_id]["chat_id"] == chat_id:
+        await send_message(chat_id, "â³ Ø´Ù…Ø§ Ø¯Ø± Ø­Ø§Ù„ Ø¨Ø§Ø²ÛŒ Ù‡Ø³ØªÛŒØ¯! ÙÙ‚Ø· Ø¹Ø¯Ø¯ Ø±Ùˆ Ø¨ÙØ±Ø³ØªÛŒØ¯.")
+        return
+        
+    target = random.randint(1, 100)
+    active_guesses[user_id] = {
+        "chat_id": chat_id,
+        "target": target,
+        "attempts_left": 7,
+        "expires_at": time.time() + GUESS_TTL
+    }
+    
+    text = (
+        "ðŸŽ¯ <b>Ø¨Ø§Ø²ÛŒ Ø­Ø¯Ø³ Ø¹Ø¯Ø¯ Ø´Ø±ÙˆØ¹ Ø´Ø¯!</b>\n\n"
+        "Ù…Ù† ÛŒÚ© Ø¹Ø¯Ø¯ Ø¨ÛŒÙ† <b>Û± ØªØ§ Û±Û°Û°</b> Ø¯Ø± Ù†Ø¸Ø± Ú¯Ø±ÙØªÙ….\n"
+        "Ø´Ù…Ø§ <b>Û· ÙØ±ØµØª</b> Ø¯Ø§Ø±ÛŒØ¯ ØªØ§ Ø§ÙˆÙ† Ø±Ùˆ Ø­Ø¯Ø³ Ø¨Ø²Ù†ÛŒØ¯.\n\n"
+        "âœï¸ ÙÙ‚Ø· Ú©Ø§ÙÛŒÙ‡ Ø¹Ø¯Ø¯ Ù…ÙˆØ±Ø¯ Ù†Ø¸Ø±ØªÙˆÙ† Ø±Ùˆ Ù‡Ù…ÛŒÙ†Ø¬Ø§ Ø¨ÙØ±Ø³ØªÛŒØ¯!\n"
+        "<i>(ÙØ±ØµØªâ€ŒÙ‡Ø§: Û· Ø§Ø² Û·)</i>"
+    )
+    await send_message(chat_id, text)
+
+async def check_guess(chat_id, user_id, guess):
+    """Ø¨Ø±Ø±Ø³ÛŒ Ø¹Ø¯Ø¯ Ø§Ø±Ø³Ø§Ù„ Ø´Ø¯Ù‡ Ú©Ø§Ø±Ø¨Ø± Ø¯Ø± Ø­ÛŒÙ† Ø¨Ø§Ø²ÛŒ"""
+    # Ø§Ú¯Ù‡ Ú©Ø§Ø±Ø¨Ø± Ø¨Ø§Ø²ÛŒ Ù†Ú©Ø±Ø¯Ù‡ Ø¨Ø§Ø´Ù‡ None Ø¨Ø±Ù…ÛŒÚ¯Ø±Ø¯Ù‡ ØªØ§ Ù¾ÛŒØ§Ù… Ø¹Ø§Ø¯ÛŒ ì²˜ë¦¬ Ø¨Ø´Ù‡
+    if user_id not in active_guesses or active_guesses[user_id]["chat_id"] != chat_id:
+        return None
+        
+    game = active_guesses[user_id]
+    
+    # Ø¨Ø±Ø±Ø³ÛŒ Ø²Ù…Ø§Ù† Ø§Ù†Ù‚Ø¶Ø§ÛŒ Ø¨Ø§Ø²ÛŒ
+    if time.time() > game["expires_at"]:
+        del active_guesses[user_id]
+        return "âŒ› Ø²Ù…Ø§Ù† Ø¨Ø§Ø²ÛŒ Ø¨Ù‡ Ù¾Ø§ÛŒØ§Ù† Ø±Ø³ÛŒØ¯! Ø¨Ø§Ø²ÛŒ Ù„ØºÙˆ Ø´Ø¯."
+        
+    target = game["target"]
+    game["attempts_left"] -= 1
+    attempts_left = game["attempts_left"]
+    
+    # Ø§Ú¯Ù‡ Ø¯Ø±Ø³Øª Ø­Ø¯Ø³ Ø²Ø¯
+    if guess == target:
+        del active_guesses[user_id]
+        await add_xp(user_id, chat_id, 30)
+        return f"ðŸŽ‰ <b>Ø¢ÙØ±ÛŒÙ†! Ø¯Ø±Ø³Øª Ø­Ø¯Ø³ Ø²Ø¯ÛŒ!</b>\nØ¹Ø¯Ø¯ Ù…Ù† <b>{target}</b> Ø¨ÙˆØ¯.\n+30 XP Ø¨Ù‡ Ø´Ù…Ø§ Ø§Ø¶Ø§ÙÙ‡ Ø´Ø¯."
+        
+    # Ø§Ú¯Ù‡ ÙØ±ØµØªâ€ŒÙ‡Ø§ ØªÙ…ÙˆÙ… Ø´Ø¯
+    if attempts_left == 0:
+        del active_guesses[user_id]
+        return f"ðŸ˜¢ <b>Ø¨Ø§Ø®ØªÛŒ!</b>\nÙØ±ØµØªâ€ŒÙ‡Ø§Øª ØªÙ…ÙˆÙ… Ø´Ø¯.\nØ¹Ø¯Ø¯ Ù…Ù† <b>{target}</b> Ø¨ÙˆØ¯."
+        
+    # Ø±Ø§Ù‡Ù†Ù…Ø§ÛŒÛŒ (Ø¨Ø²Ø±Ú¯â€ŒØªØ± ÛŒØ§ Ú©ÙˆÚ†ÛŒÚ©â€ŒØªØ±)
+    hint = "â¬†ï¸ Ø¹Ø¯Ø¯ Ù…Ù† Ø¨Ø²Ø±Ú¯â€ŒØªØ±Ù‡!" if guess < target else "â¬‡ï¸ Ø¹Ø¯Ø¯ Ù…Ù† Ú©ÙˆÚ†ÛŒÚ©â€ŒØªØ±Ù‡!"
+    return f"{hint}\n\n<i>(ÙØ±ØµØªâ€ŒÙ‡Ø§ÛŒ Ø¨Ø§Ù‚ÛŒÙ…Ø§Ù†Ø¯Ù‡: {attempts_left})</i>"
+
 
 ===== handlers\moderation.py =====
 
@@ -2201,7 +2316,7 @@ async def check_message_violations(chat_id, message):
     
     settings = await get_group_settings(chat_id)
 
-    # Û±. Ø¨Ø±Ø±Ø³ÛŒ Ø¶Ø¯ Ù„ÛŒÙ†Ú© (Ø¨Ø±Ú¯Ø´Øª Ø¨Ù‡ Ø­Ø§Ù„Øª Ø¹Ø§Ø¯ÛŒ - Ù¾Ø§Ú© Ú©Ø±Ø¯Ù† Ù„ÛŒÙ†Ú©â€ŒÙ‡Ø§)
+    # Û±. Ø¨Ø±Ø±Ø³ÛŒ Ø¶Ø¯ Ù„ÛŒÙ†Ú©
     if settings.get("antilink", 1) or settings.get("lock_links", 0):
         url_pattern = re.compile(r'(https?://\S+|www\.\S+|t\.me/\S+|telegram\.me/\S+|splus\.ir/\S+)', re.IGNORECASE)
         if url_pattern.search(text):
@@ -2238,7 +2353,6 @@ async def check_message_violations(chat_id, message):
     if settings.get("antispam", 1):
         now = time.time()
         cache_key = (chat_id, user_id)
-        
         _flood_cache[cache_key] = [t for t in _flood_cache[cache_key] if now - t < FLOOD_WINDOW]
         _flood_cache[cache_key].append(now)
         
@@ -2252,60 +2366,7 @@ async def check_message_violations(chat_id, message):
             
             if count >= MAX_WARNINGS:
                 await mute_user(user_id, chat_id, 1800)
-                await send_message(
-                    chat_id, 
-                    f"ðŸ”‡ Ú©Ø§Ø±Ø¨Ø± <b>{first_name}</b> Ø¨Ù‡ Ø¯Ù„ÛŒÙ„ ØªÚ©Ø±Ø§Ø± Ø§Ø³Ù¾Ù…ØŒ Ø¨Ø±Ø§ÛŒ Û³Û° Ø¯Ù‚ÛŒÙ‚Ù‡ Ù…ÛŒÙˆØª Ø´Ø¯!"
-                )
-            return True
-
-    return False
-
-    # Û². Ø¨Ø±Ø±Ø³ÛŒ ÙÛŒÙ„ØªØ± Ú©Ù„Ù…Ø§Øª
-    if settings.get("filter_enabled", 1):
-        filters = await get_filters(chat_id)
-        normalized_text = normalize_text(text)
-        for bad_word in filters:
-            if bad_word in normalized_text:
-                await delete_message(chat_id, message_id)
-                await send_message(chat_id, "ðŸ›‘ Ø§Ø³ØªÙØ§Ø¯Ù‡ Ø§Ø² Ú©Ù„Ù…Ø§Øª Ù…Ù…Ù†ÙˆØ¹Ù‡ Ù…Ø¬Ø§Ø² Ù†ÛŒØ³Øª!")
-                return True
-
-    # Û³. Ø¨Ø±Ø±Ø³ÛŒ Ù‚ÙÙ„â€ŒÙ‡Ø§ÛŒ Ø±Ø³Ø§Ù†Ù‡â€ŒØ§ÛŒ
-    if settings.get("lock_photos", 0) and message.get("photo"):
-        await delete_message(chat_id, message_id)
-        return True
-    if settings.get("lock_videos", 0) and message.get("video"):
-        await delete_message(chat_id, message_id)
-        return True
-    if settings.get("lock_stickers", 0) and message.get("sticker"):
-        await delete_message(chat_id, message_id)
-        return True
-    if settings.get("lock_forward", 0) and (message.get("forward_from") or message.get("forward_from_chat")):
-        await delete_message(chat_id, message_id)
-        return True
-
-    # Û´. Ø¨Ø±Ø±Ø³ÛŒ Ø§Ø³Ù¾Ù… Ùˆ ÙÙ„ÙˆØ¯
-    if settings.get("antispam", 1):
-        now = time.time()
-        cache_key = (chat_id, user_id)
-        
-        _flood_cache[cache_key] = [t for t in _flood_cache[cache_key] if now - t < FLOOD_WINDOW]
-        _flood_cache[cache_key].append(now)
-        
-        if len(_flood_cache[cache_key]) > FLOOD_LIMIT:
-            await delete_message(chat_id, message_id)
-            await send_message(chat_id, f"âš ï¸ Ú©Ø§Ø±Ø¨Ø± <b>{first_name}</b> Ø¨Ù‡ Ø¯Ù„ÛŒÙ„ Ø§Ø³Ù¾Ù… Ù…Ø­Ø¯ÙˆØ¯ Ø´Ø¯!")
-            _flood_cache[cache_key] = [] 
-            
-            await add_warning(user_id, chat_id, "Ø§Ø³Ù¾Ù… Ùˆ ÙÙ„ÙˆØ¯")
-            count = await get_warnings_count(user_id, chat_id)
-            
-            if count >= MAX_WARNINGS:
-                await mute_user(user_id, chat_id, 1800)
-                await send_message(
-                    chat_id, 
-                    f"ðŸ”‡ Ú©Ø§Ø±Ø¨Ø± <b>{first_name}</b> Ø¨Ù‡ Ø¯Ù„ÛŒÙ„ ØªÚ©Ø±Ø§Ø± Ø§Ø³Ù¾Ù…ØŒ Ø¨Ø±Ø§ÛŒ Û³Û° Ø¯Ù‚ÛŒÙ‚Ù‡ Ù…ÛŒÙˆØª Ø´Ø¯!"
-                )
+                await send_message(chat_id, f"ðŸ”‡ Ú©Ø§Ø±Ø¨Ø± <b>{first_name}</b> Ø¨Ù‡ Ø¯Ù„ÛŒÙ„ ØªÚ©Ø±Ø§Ø± Ø§Ø³Ù¾Ù…ØŒ Ø¨Ø±Ø§ÛŒ Û³Û° Ø¯Ù‚ÛŒÙ‚Ù‡ Ù…ÛŒÙˆØª Ø´Ø¯!")
             return True
 
     return False
@@ -2555,7 +2616,7 @@ async def get_group_settings(chat_id):
         return _settings_cache[chat_id]["data"]
         
     await ensure_group_exists(chat_id)
-    row = await execute_query("SELECT antilink, antispam, filter_enabled, welcome_enabled, lock_links, lock_photos, lock_videos, lock_stickers, lock_forward FROM groups WHERE chat_id=?", (chat_id,), fetch=True)
+    row = await execute_query("SELECT antilink, antispam, filter_enabled, welcome_enabled, lock_links, lock_photos, lock_videos, lock_stickers, lock_forward, module_games, module_economy FROM groups WHERE chat_id=?", (chat_id,), fetch=True)
     data = dict(row[0]) if row else {}
     _settings_cache[chat_id] = {"time": current_time, "data": data}
     return data
@@ -2708,14 +2769,11 @@ async def get_mod_logs(chat_id, limit=5):
 
 
 async def get_bot_global_stats():
-    """Ú¯Ø±ÙØªÙ† Ø¢Ù…Ø§Ø± Ú©Ù„ÛŒ Ø±Ø¨Ø§Øª Ø¨Ø±Ø§ÛŒ Ù…Ø§Ù„Ú©"""
-    total_groups = await execute_query("SELECT COUNT(*) as count FROM groups", fetch=True)
-    total_users = await execute_query("SELECT COUNT(*) as count FROM user_stats", fetch=True)
+    """Ú¯Ø±ÙØªÙ† Ù„ÛŒØ³Øª Ú¯Ø±ÙˆÙ‡â€ŒÙ‡Ø§ Ùˆ Ú©Ø§Ø±Ø¨Ø±Ø§Ù† Ø¨Ø±Ø§ÛŒ Ù…Ø§Ù„Ú© Ø±Ø¨Ø§Øª"""
+    groups = await execute_query("SELECT chat_id FROM groups", fetch=True)
+    users = await execute_query("SELECT user_id, username FROM user_stats", fetch=True)
     
-    g_count = total_groups[0]["count"] if total_groups else 0
-    u_count = total_users[0]["count"] if total_users else 0
-    
-    return g_count, u_count
+    return groups, users
 
 
 ===== services\permission_service.py =====

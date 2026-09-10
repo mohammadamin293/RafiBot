@@ -102,6 +102,8 @@ async def init_db():
     
     # اضافه کردن ستون یوزرنیم برای دیتابیس‌های قدیمی
     await _add_column_if_missing("user_stats", "username", "TEXT")
+    await _add_column_if_missing("groups", "module_games", "BOOLEAN DEFAULT 1")
+    await _add_column_if_missing("groups", "module_economy", "BOOLEAN DEFAULT 1")
     
     await _db_conn.commit()
     logging.info("Database initialized successfully")

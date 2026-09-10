@@ -148,9 +148,11 @@ async def handle_callback_query(callback_query):
         await answer_callback(callback_id)
 
     elif data == "game_guess":
+        from handlers.games import start_guess
+        await start_guess(chat_id, user_id)
         await edit_message_text(
             chat_id, message_id, 
-            "🎯 <b>حدس عدد</b>\n\nاین بخش به‌زودی اضافه خواهد شد!",
+            "🎯 <b>بازی حدس عدد شروع شد!</b>\n\nبه پیام بالایی نگاه کنید و اعداد رو بفرستید.",
             reply_markup=get_back_keyboard("games_menu")
         )
         await answer_callback(callback_id)

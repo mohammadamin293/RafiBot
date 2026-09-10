@@ -28,6 +28,7 @@ async def process_message(message):
     text = message.get("text", "")
     user_id = message["from"]["id"]
     first_name = message["from"].get("first_name", "کاربر")
+    chat_type = message.get("chat", {}).get("type")
 
     # عضو جدید
     if "new_chat_members" in message:
@@ -60,17 +61,19 @@ async def process_message(message):
     if not text.startswith("/") and text not in MENU_BUTTON_TEXTS:
         leveled_up = await add_xp(user_id, chat_id, 5)
         await increment_message_count(chat_id)
-        await track_user(chat_id, user_id, first_name)
+        username = message["from"].get("username", "") # <-- این خط اضافه شد
         await track_user(chat_id, user_id, first_name, username)
         
         # پیام سطح‌آپ
         if leveled_up:
             stats = await get_user_stats(user_id, chat_id)
-            await send_message(
-                chat_id, 
-                f"🎉 تبریک <b>{first_name}</b>!\n"
-                f"شما به <b>Level {stats['level']}</b> رسیدید! 🚀"
-            )
+            # ارسال پیام سطح‌آپ فقط در پی‌وی (PV) برای جلوگیری از اسپم در گروه
+            if chat_type == "private":
+                await send_message(
+                    chat_id, 
+                    f"🎉 تبریک <b>{first_name}</b>!\n"
+                    f"شما به <b>Level {stats['level']}</b> رسیدید! 🚀"
+                )
 
     # هدایت به مسیریاب
     await route_message(message)

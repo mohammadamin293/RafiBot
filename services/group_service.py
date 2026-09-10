@@ -15,7 +15,7 @@ async def get_group_settings(chat_id):
         return _settings_cache[chat_id]["data"]
         
     await ensure_group_exists(chat_id)
-    row = await execute_query("SELECT antilink, antispam, filter_enabled, welcome_enabled, lock_links, lock_photos, lock_videos, lock_stickers, lock_forward FROM groups WHERE chat_id=?", (chat_id,), fetch=True)
+    row = await execute_query("SELECT antilink, antispam, filter_enabled, welcome_enabled, lock_links, lock_photos, lock_videos, lock_stickers, lock_forward, module_games, module_economy FROM groups WHERE chat_id=?", (chat_id,), fetch=True)
     data = dict(row[0]) if row else {}
     _settings_cache[chat_id] = {"time": current_time, "data": data}
     return data

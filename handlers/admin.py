@@ -25,7 +25,8 @@ def get_admin_panel_keyboard(settings):
             [status_btn("lock_links", "🔗 قفل لینک"), status_btn("lock_photos", "🖼 قفل عکس")],
             [status_btn("lock_videos", "🎬 قفل ویدیو"), status_btn("lock_stickers", "🏷 قفل استیکر")],
             [status_btn("lock_forward", "📤 قفل فوروارد")],
-            [{"text": "🔙 بازگشت به منوی اصلی", "callback_data": "main_menu"}]
+            [status_btn("module_games", "🎮 فعالسازی بازی‌ها"), status_btn("module_economy", "💰 فعالسازی اقتصاد")],
+            [{"text": "↩️ بازگشت به منوی اصلی", "callback_data": "main_menu"}]
         ]
     }
 

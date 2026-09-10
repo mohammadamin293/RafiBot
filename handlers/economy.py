@@ -2,6 +2,8 @@
 import random
 from core.api_client import send_message
 from services.economy_service import get_balance, add_coins, claim_daily
+# متن تبلیغاتی شما (هر چند وقت یه بار میتونی این متن رو عوض کنی)
+AD_TEXT = "\n\n📢 <i>جهت رزرو تبلیغات در این ربات پیام دهید: @Iambrrr</i>"
 
 async def handle_balance(chat_id, user_id, first_name):
     balance = await get_balance(user_id, chat_id)
@@ -11,6 +13,7 @@ async def handle_balance(chat_id, user_id, first_name):
         f"💵 سکه: <b>{balance}</b>\n\n"
         f"برای دریافت سکه رایگان، دستور /daily را بزنید!"
     )
+    text += AD_TEXT
     await send_message(chat_id, text)
 
 async def handle_daily(chat_id, user_id, first_name):
@@ -21,13 +24,15 @@ async def handle_daily(chat_id, user_id, first_name):
             f"🎁 <b>پاداش روزانه!</b>\n\n"
             f"🎉 {first_name} عزیز، شما <b>{reward} سکه</b> دریافت کردید! 💵\n"
             f"🔥 استریک شما: <b>{streak} روز</b>\n\n"
-            f"💡 هر روز برگردید تا استریکتان بیشتر شود و سکه‌های بیشتری بگیرید!"
+            f"💡 هر روز برگردید تا استریک‌تان بیشتر شود و سکه‌های بیشتری بگیرید!"
         )
     else:
         remaining_seconds = data
         hours = remaining_seconds // 3600
         minutes = (remaining_seconds % 3600) // 60
-        text = f"⏳ <b>شما امروز پاداش خود را گرفته‌اید!</b>\n\nزمان باقی‌مانده برای پاداش بعدی: <b>{hours} ساعت و {minutes} دقیقه</b>"
+        text = f"⏳ <b>شما امروز پاداش خود را گرفته‌اید!</b>\n\nزمان باقیمانده برای پاداش بعدی: <b>{hours} ساعت و {minutes} دقیقه</b>"
+    
+    text += AD_TEXT
     await send_message(chat_id, text)
 
 async def handle_coinflip(chat_id, text, user_id, first_name):
